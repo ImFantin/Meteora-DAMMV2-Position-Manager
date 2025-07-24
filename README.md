@@ -37,8 +37,8 @@ A powerful command-line tool to manage your Meteora DAMM V2 positions with autom
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd meteora-position-manager
+git clone https://github.com/ImFantin/Meteora-DAMMV2-Position-Manager.git
+cd Meteora-DAMMV2-Position-Manager
 
 # Install dependencies
 npm install
