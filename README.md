@@ -1,4 +1,4 @@
-# Meteora Position Manager
+# Meteora DAMM Position Manager
 
 A powerful command-line tool to manage your Meteora DAMM V2 positions with automated fee claiming, position closing, and token swapping.
 
