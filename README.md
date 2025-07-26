@@ -106,10 +106,10 @@ node dist/index.js summary
 ```
 🌊 Welcome to Meteora Fee Claimer & Position Manager
 ════════════════════════════════════════════════════════════
-🔑 Using Wallet 1: AG8F9tam...
+🔑 Using Wallet 1: 7xKXtg2C...
 🔑 Wallet 1 Info:
-   Address: AG8F9tamsLbjENSjvjRmF5rcqxCTu7Q1YEkmb6veVCtE
-   Balance: 3.6245 SOL
+   Address: 7xKXtg2CWASsLkBkuGwU4AXLcnWjHxCBbQkd5nAuiXvF
+   Balance: 2.1543 SOL
 
 √ What would you like to do? (Current: Wallet 1) 💰 Claim All Fees
 
@@ -124,9 +124,9 @@ node dist/index.js summary
 💰 Found 5 position(s) with fees ≥ $5.00
    (131 position(s) skipped due to low fees)
 
-[1/5] Processing position 5RJxRBwY...
-   Claimable fees: 229821406 (B)
-✅ Fees claimed! Signature: 4Rru5RcnTjw6EiwCdyTSdWkZwpSBfc7f8a38RKynzwkU...
+[1/5] Processing position 9mWxQoZ3...
+   Claimable fees: 156789012 (B)
+✅ Fees claimed! Signature: 2Hx9KpL4mN8vR6tY3qA5bC7dE9fG1hI2jK3lM4nO5pQ6rS7tU8vW...
 
 📈 Summary:
    Positions processed: 5
