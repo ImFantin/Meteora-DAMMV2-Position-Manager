@@ -107,6 +107,10 @@ export class MeteoraClient {
                 } else if (feeSchedulerMode === 1) { // Exponential
                     const reductionRate = reductionFactor / 10000;
                     currentFeeNumerator = cliffFeeNumerator * Math.pow(1 - reductionRate, effectivePeriods);
+                } else {
+                    // Unknown fee scheduler mode - log warning and use cliff fee as fallback
+                    console.log(`   ⚠️ Unknown fee scheduler mode: ${feeSchedulerMode}, using cliff fee rate`);
+                    currentFeeNumerator = cliffFeeNumerator;
                 }
                 
                 // Convert to percentage using the correct denominator (1 billion)

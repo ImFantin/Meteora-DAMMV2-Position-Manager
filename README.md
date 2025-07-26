@@ -48,7 +48,7 @@ npm run build
 
    # Additional wallets (optional)
    # PRIVATE_KEY_2=your_second_wallet_here
-   # PRIVATE_KEY_3=[226,238,211,21,151,163,75,132...]  # Solflare array format
+   # PRIVATE_KEY_3=[123,45,67,89,101,112,131,145...]  # Solflare array format
    ```
 
 3. **Get your private key:**
@@ -215,7 +215,7 @@ For issues or questions:
 
 If this tool has helped you efficiently manage your Meteora positions and saved you valuable time, consider buying me a coffee! ☕
 
-**If you feel sharing some love:** `2Y3MR5qDwNBrJK8fYxvaXdhSxKEcoDuyxsy8xCcnzk37`
+**If you feel like sharing some love:** `2Y3MR5qDwNBrJK8fYxvaXdhSxKEcoDuyxsy8xCcnzk37`
 
 Every contribution, no matter how small, helps keep this project alive and motivates continued development for the community! Your support means the world to me. 🙏✨
 

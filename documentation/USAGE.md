@@ -36,7 +36,7 @@ PRIVATE_KEY=your_base58_private_key_here
 
 # Additional wallets (optional)
 PRIVATE_KEY_2=your_second_wallet_here
-PRIVATE_KEY_3=[226,238,211,21,151,163,75,132...]  # Solflare array format
+PRIVATE_KEY_3=[123,45,67,89,101,112,131,145...]  # Solflare array format
 ```
 
 ### Private Key Formats
@@ -48,7 +48,7 @@ PRIVATE_KEY=5Kb8kLf4o6GjMDP58u3LF8BXAHy9v7GuvCz3rEqAh7yMBanNa9DMugjYMQL6FG3ntHWW
 
 **Solflare Array Format:**
 ```
-PRIVATE_KEY_2=[226,238,211,21,151,163,75,132,88,209,62,112,127,209,190,17,44,244,147,227,82,100,100,245,217,166,211,73,213,154,120,194,240,86,83,95,226,36,67,127,175,20,234,255,53,18,215,189,252,141,152,21,124,96,2,35,18,110,198,179,21,96,168,180]
+PRIVATE_KEY_2=[123,45,67,89,101,112,131,145,156,167,178,189,200,211,222,233,244,255,10,21,32,43,54,65,76,87,98,109,120,131,142,153,164,175,186,197,208,219,230,241,252,7,18,29,40,51,62,73,84,95,106,117,128,139,150,161,172,183,194,205,216,227,238,249]
 ```
 
 ## Usage Modes
@@ -123,9 +123,9 @@ When multiple wallets are detected:
 ```
 🔑 Found 3 wallets in configuration
 √ Select wallet to use: 
-  Wallet 1 - AG8F9tam...b6veVCtE
-  Wallet 2 - HBBCGjmA...1VMN8f31
-  Wallet 3 - xty6pCxs...QanftUVY
+  Wallet 1 - 7xKXtg2C...d5nAuiXvF
+  Wallet 2 - 9mWxQoZ3...k8LpMnOpQ
+  Wallet 3 - 5Kb8kLf4...BcD2fGpVb
 ```
 
 **Features:**
