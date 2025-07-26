@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import inquirer from 'inquirer';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { isValidPublicKey, isValidPrivateKey, retry } from './utils.js';
+import { isValidPublicKey, isValidPrivateKey, normalizePrivateKey, retry, rateLimitDelay, fetchSOLPrice } from './utils.js';
 import { MeteoraClient } from './meteora-client.js';
 
 // Load environment variables
@@ -23,10 +23,18 @@ interface ClaimResult {
   feesB?: number;
 }
 
+interface WalletInfo {
+  name: string;
+  keypair: Keypair;
+  address: string;
+}
+
 class MeteoraFeeClaimer {
   private connection: Connection;
   private wallet: Keypair;
   private meteoraClient: MeteoraClient;
+  private availableWallets: WalletInfo[];
+  private selectedWallet: WalletInfo;
 
   constructor() {
     // Initialize connection
@@ -36,30 +44,85 @@ class MeteoraFeeClaimer {
     }
     this.connection = new Connection(rpcUrl, 'confirmed');
 
-    // Initialize wallet
-    const privateKey = process.env.PRIVATE_KEY;
-    if (!privateKey) {
-      throw new Error('PRIVATE_KEY not found in environment variables');
+    // Load all available wallets
+    this.availableWallets = this.loadWallets();
+    
+    if (this.availableWallets.length === 0) {
+      throw new Error('No valid private keys found in environment variables');
     }
 
-    if (!isValidPrivateKey(privateKey)) {
-      throw new Error('Invalid private key format. Please provide a base58 encoded private key.');
-    }
-
-    try {
-      const secretKey = bs58.decode(privateKey);
-      this.wallet = Keypair.fromSecretKey(secretKey);
-    } catch (error) {
-      throw new Error('Failed to create wallet from private key.');
-    }
+    // Set default wallet (first one)
+    this.selectedWallet = this.availableWallets[0];
+    this.wallet = this.selectedWallet.keypair;
 
     // Initialize Meteora client
     this.meteoraClient = new MeteoraClient(this.connection);
   }
 
+  private loadWallets(): WalletInfo[] {
+    const wallets: WalletInfo[] = [];
+    
+    // Check for PRIVATE_KEY and PRIVATE_KEY_2, PRIVATE_KEY_3, etc.
+    for (let i = 1; i <= 10; i++) {
+      const keyName = i === 1 ? 'PRIVATE_KEY' : `PRIVATE_KEY_${i}`;
+      const privateKey = process.env[keyName];
+      
+      if (privateKey) {
+        if (!isValidPrivateKey(privateKey)) {
+          console.log(chalk.yellow(`⚠️  Warning: Invalid private key format for ${keyName}, skipping`));
+          continue;
+        }
+
+        try {
+          const secretKey = normalizePrivateKey(privateKey);
+          const keypair = Keypair.fromSecretKey(secretKey);
+          const address = keypair.publicKey.toString();
+          
+          wallets.push({
+            name: i === 1 ? 'Wallet 1' : `Wallet ${i}`,
+            keypair,
+            address
+          });
+        } catch (error) {
+          console.log(chalk.yellow(`⚠️  Warning: Failed to create wallet from ${keyName}: ${error instanceof Error ? error.message : 'Unknown error'}`));
+        }
+      }
+    }
+
+    return wallets;
+  }
+
+  async selectWallet(): Promise<void> {
+    if (this.availableWallets.length === 1) {
+      console.log(chalk.blue(`🔑 Using ${this.selectedWallet.name}: ${this.selectedWallet.address.slice(0, 8)}...`));
+      return;
+    }
+
+    console.log(chalk.blue(`\n🔑 Found ${this.availableWallets.length} wallets in configuration`));
+    
+    const choices = this.availableWallets.map((wallet, index) => ({
+      name: `${wallet.name} - ${wallet.address.slice(0, 8)}...${wallet.address.slice(-8)}`,
+      value: index
+    }));
+
+    const walletChoice = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'walletIndex',
+        message: 'Select wallet to use:',
+        choices
+      }
+    ]);
+
+    this.selectedWallet = this.availableWallets[walletChoice.walletIndex];
+    this.wallet = this.selectedWallet.keypair;
+    
+    console.log(chalk.green(`✅ Selected ${this.selectedWallet.name}: ${this.selectedWallet.address}`));
+  }
+
   async getWalletInfo(): Promise<void> {
     const balance = await this.connection.getBalance(this.wallet.publicKey);
-    console.log(chalk.blue('🔑 Wallet Info:'));
+    console.log(chalk.blue(`🔑 ${this.selectedWallet.name} Info:`));
     console.log(chalk.gray(`   Address: ${this.wallet.publicKey.toString()}`));
     console.log(chalk.gray(`   Balance: ${(balance / 1e9).toFixed(4)} SOL`));
     console.log();
@@ -195,7 +258,7 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async claimAllFees(swapToSOL: boolean = false, slippageBps: number = 10): Promise<ClaimResult> {
+  async claimAllFees(swapToSOL: boolean = false, slippageBps: number = 10, minFeeThreshold: number = 0, solPrice: number = 200): Promise<ClaimResult> {
     try {
       console.log(chalk.blue('🔍 Scanning all positions for claimable fees...'));
 
@@ -211,21 +274,34 @@ class MeteoraFeeClaimer {
 
       console.log(chalk.blue(`📊 Found ${allPositions.length} total position(s)`));
 
-      // Filter positions with claimable fees
+      // Filter positions with claimable fees above threshold
       const positionsWithFees = allPositions.filter(position => {
         const claimableFeesA = position.feeOwedA || 0;
         const claimableFeesB = position.feeOwedB || 0;
-        return claimableFeesA > 0 || claimableFeesB > 0;
+        const totalFees = claimableFeesA + claimableFeesB;
+        return totalFees >= minFeeThreshold;
       });
 
       if (positionsWithFees.length === 0) {
+        const message = minFeeThreshold > 0 
+          ? `No positions with fees ≥ $${((minFeeThreshold / 1e9) * solPrice).toFixed(2)} found`
+          : 'No positions with claimable fees found';
         return {
           success: false,
-          error: 'No positions with claimable fees found'
+          error: message
         };
       }
 
-      console.log(chalk.green(`💰 Found ${positionsWithFees.length} position(s) with claimable fees`));
+      if (minFeeThreshold > 0) {
+        const skippedPositions = allPositions.length - positionsWithFees.length;
+        const thresholdUSD = ((minFeeThreshold / 1e9) * solPrice).toFixed(2);
+        console.log(chalk.green(`💰 Found ${positionsWithFees.length} position(s) with fees ≥ $${thresholdUSD}`));
+        if (skippedPositions > 0) {
+          console.log(chalk.gray(`   (${skippedPositions} position(s) skipped due to low fees)`));
+        }
+      } else {
+        console.log(chalk.green(`💰 Found ${positionsWithFees.length} position(s) with claimable fees`));
+      }
       console.log();
 
       let totalFeesA = 0;
@@ -244,6 +320,11 @@ class MeteoraFeeClaimer {
           console.log(chalk.blue(`\n[${i + 1}/${positionsWithFees.length}] Processing position ${positionId}...`));
           if (claimableFeesA > 0 || claimableFeesB > 0) {
             console.log(chalk.gray(`   Claimable fees: ${claimableFeesA > 0 ? claimableFeesA + ' (A) ' : ''}${claimableFeesB > 0 ? claimableFeesB + ' (B)' : ''}`));
+          }
+
+          // Add delay before processing each position to respect rate limits
+          if (i > 0) {
+            await rateLimitDelay();
           }
 
           if (!position.positionNftAccount) {
@@ -293,9 +374,9 @@ class MeteoraFeeClaimer {
             console.log(chalk.green(`   ✅ Fees claimed! Signature: ${signature}`));
           }
 
-          // Add a small delay between transactions to avoid rate limiting
+          // Add a delay between transactions to avoid rate limiting
           if (i < positionsWithFees.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await rateLimitDelay();
           }
 
         } catch (positionError) {
@@ -334,22 +415,33 @@ class MeteoraFeeClaimer {
     console.log(chalk.blue.bold('\n🌊 Welcome to Meteora Fee Claimer & Position Manager'));
     console.log(chalk.gray('═'.repeat(60)));
     
+    // Select wallet if multiple are available
+    await this.selectWallet();
+    
     await this.getWalletInfo();
     
     while (true) {
       try {
-        // Main menu
+        // Simplified main menu
+        const mainChoices = [
+          { name: '💰 Claim All Fees (Keep Original Tokens)', value: 'claim-all' },
+          { name: '🔥 Close All Positions (Claim + Close + Optional Swap)', value: 'close-all' },
+          { name: '📊 View Position Summary', value: 'summary' }
+        ];
+
+        // Add wallet switching option if multiple wallets are available
+        if (this.availableWallets.length > 1) {
+          mainChoices.push({ name: '🔄 Switch Wallet', value: 'switch-wallet' });
+        }
+
+        mainChoices.push({ name: '❌ Exit', value: 'exit' });
+
         const mainChoice = await inquirer.prompt([
           {
             type: 'list',
             name: 'action',
-            message: 'What would you like to do?',
-            choices: [
-              { name: '💰 Claim/Close (Keep Original Tokens)', value: 'claim' },
-              { name: '🔄 Claim/Close & Auto-Swap to SOL', value: 'claim-swap' },
-              { name: '📊 View Position Summary', value: 'summary' },
-              { name: '❌ Exit', value: 'exit' }
-            ]
+            message: `What would you like to do? (Current: ${this.selectedWallet.name})`,
+            choices: mainChoices
           }
         ]);
 
@@ -358,63 +450,86 @@ class MeteoraFeeClaimer {
           break;
         }
 
+        if (mainChoice.action === 'switch-wallet') {
+          await this.selectWallet();
+          await this.getWalletInfo();
+          continue;
+        }
+
         if (mainChoice.action === 'summary') {
           await this.showSummary();
           continue;
         }
 
-        const swapToSOL = mainChoice.action === 'claim-swap';
-
-        // Secondary menu with different options based on swap choice
-        const choices = swapToSOL ? [
-          { name: '🎯 Claim Fees from Specific Pool → Swap to SOL', value: 'claim-pool' },
-          { name: '🏠 Claim & Close Position from Specific Pool → Swap to SOL', value: 'close-pool' },
-          { name: '🌟 Claim All Fees → Swap to SOL', value: 'claim-all' },
-          { name: '🔥 Claim, Close & Swap All Positions → Convert Everything to SOL', value: 'close-all' },
-          { name: '⬅️  Back to Main Menu', value: 'back' }
-        ] : [
-          { name: '🎯 Claim Fees from Specific Pool', value: 'claim-pool' },
-          { name: '🏠 Claim & Close Position from Specific Pool', value: 'close-pool' },
-          { name: '🌟 Claim All Fees (Keep Original Tokens)', value: 'claim-all' },
-          { name: '🔥 Claim & Close All Positions (Keep Original Tokens)', value: 'close-all' },
-          { name: '⬅️  Back to Main Menu', value: 'back' }
-        ];
-
-        const actionChoice = await inquirer.prompt([
-          {
-            type: 'list',
-            name: 'operation',
-            message: swapToSOL ? 'Choose operation (with automatic swap to SOL):' : 'Choose operation (keeping original tokens):',
-            choices
-          }
-        ]);
-
-        if (actionChoice.operation === 'back') {
+        if (mainChoice.action === 'claim-all') {
+          await this.handleClaimAll(false, 10); // Keep tokens, default slippage
           continue;
         }
 
-        let slippageBps = 10;
-        if (swapToSOL) {
-          const slippageChoice = await inquirer.prompt([
+        if (mainChoice.action === 'close-all') {
+          // Ask if user wants to swap to SOL
+          const swapChoice = await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'swapToSOL',
+              message: 'Swap all received tokens to SOL?',
+              default: false
+            }
+          ]);
+
+          let slippageBps = 10;
+          if (swapChoice.swapToSOL) {
+            const slippageChoice = await inquirer.prompt([
+              {
+                type: 'input',
+                name: 'slippage',
+                message: 'Enter slippage tolerance in basis points (default: 10):',
+                default: '10',
+                validate: (input) => {
+                  const num = parseInt(input);
+                  if (isNaN(num) || num < 1 || num > 1000) {
+                    return 'Please enter a number between 1 and 1000';
+                  }
+                  return true;
+                }
+              }
+            ]);
+            slippageBps = parseInt(slippageChoice.slippage);
+          }
+
+          // Ask for fee rate threshold
+          console.log(chalk.blue('\n🎯 Fee Rate Filtering'));
+          console.log(chalk.gray('Meteora pools start at 50% fees and decay over time.'));
+          console.log(chalk.gray('You can filter to only close positions in pools with lower fees.'));
+          
+          const feeRateChoice = await inquirer.prompt([
             {
               type: 'input',
-              name: 'slippage',
-              message: 'Enter slippage tolerance in basis points (default: 10):',
-              default: '10',
+              name: 'maxFeeRate',
+              message: 'Close positions in pools with fees ≤ X% (enter 100 for all pools, 20 to close pools ≤20%, 10 to close pools ≤10%):',
+              default: '100',
               validate: (input) => {
-                const num = parseInt(input);
-                if (isNaN(num) || num < 1 || num > 1000) {
-                  return 'Please enter a number between 1 and 1000';
+                const num = parseFloat(input);
+                if (isNaN(num) || num < 0 || num > 100) {
+                  return 'Please enter a number between 0 and 100';
                 }
                 return true;
               }
             }
           ]);
-          slippageBps = parseInt(slippageChoice.slippage);
-        }
+          
+          const feeRateValue = parseFloat(feeRateChoice.maxFeeRate);
+          const maxFeeRate = feeRateValue < 100 ? feeRateValue : null;
+          
+          if (maxFeeRate !== null) {
+            console.log(chalk.blue(`✅ Will close positions in pools with fees ≤ ${maxFeeRate}% (pools with higher fees will be skipped)`));
+          } else {
+            console.log(chalk.blue('✅ Will close positions in all pools (no fee rate filtering)'));
+          }
 
-        // Execute the chosen operation
-        await this.executeOperation(actionChoice.operation, swapToSOL, slippageBps);
+          await this.handleCloseAll(swapChoice.swapToSOL, slippageBps, maxFeeRate);
+          continue;
+        }
 
         // Ask if user wants to continue
         const continueChoice = await inquirer.prompt([
@@ -450,109 +565,54 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async executeOperation(operation: string, swapToSOL: boolean, slippageBps: number): Promise<void> {
-    switch (operation) {
-      case 'claim-pool':
-        await this.handleClaimPool(swapToSOL, slippageBps);
-        break;
-      case 'close-pool':
-        await this.handleClosePool(swapToSOL, slippageBps);
-        break;
-      case 'claim-all':
-        await this.handleClaimAll(swapToSOL, slippageBps);
-        break;
-      case 'close-all':
-        await this.handleCloseAll(swapToSOL, slippageBps);
-        break;
-    }
-  }
 
-  async handleClaimPool(swapToSOL: boolean, slippageBps: number): Promise<void> {
-    const poolChoice = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'poolAddress',
-        message: 'Enter the pool address:',
-        validate: (input) => {
-          if (!isValidPublicKey(input)) {
-            return 'Please enter a valid Solana public key';
-          }
-          return true;
-        }
-      }
-    ]);
 
-    const spinner = ora('Processing...').start();
-    try {
-      const result = await this.claimFees(poolChoice.poolAddress, swapToSOL, slippageBps);
-      
-      if (result.success) {
-        spinner.succeed('Fees claimed successfully!');
-        console.log(chalk.green('🎉 Success!'));
-        console.log(chalk.gray(`   Transaction: ${result.signature}`));
-        if (result.feesA && result.feesA > 0) {
-          console.log(chalk.gray(`   Fees A claimed: ${result.feesA}`));
-        }
-        if (result.feesB && result.feesB > 0) {
-          console.log(chalk.gray(`   Fees B claimed: ${result.feesB}`));
-        }
-      } else {
-        spinner.fail('Failed to claim fees');
-        console.log(chalk.red(`❌ Error: ${result.error}`));
-      }
-    } catch (error) {
-      spinner.fail('Failed to claim fees');
-      throw error;
-    }
-  }
 
-  async handleClosePool(swapToSOL: boolean, slippageBps: number): Promise<void> {
-    const poolChoice = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'poolAddress',
-        message: 'Enter the pool address:',
-        validate: (input) => {
-          if (!isValidPublicKey(input)) {
-            return 'Please enter a valid Solana public key';
-          }
-          return true;
-        }
-      }
-    ]);
-
-    const spinner = ora('Processing...').start();
-    try {
-      const result = await this.closePosition(poolChoice.poolAddress, 'claim-and-close', swapToSOL, slippageBps);
-      
-      if (result.success) {
-        spinner.succeed('Position closed successfully!');
-        console.log(chalk.green('🎉 Success!'));
-        console.log(chalk.gray(`   Final Transaction: ${result.signature}`));
-        if (result.feesA && result.feesA > 0) {
-          console.log(chalk.gray(`   Fees A claimed: ${result.feesA}`));
-        }
-        if (result.feesB && result.feesB > 0) {
-          console.log(chalk.gray(`   Fees B claimed: ${result.feesB}`));
-        }
-      } else {
-        spinner.fail('Failed to close position');
-        console.log(chalk.red(`❌ Error: ${result.error}`));
-      }
-    } catch (error) {
-      spinner.fail('Failed to close position');
-      throw error;
-    }
-  }
 
   async handleClaimAll(swapToSOL: boolean, slippageBps: number): Promise<void> {
+    // Ask for minimum fee threshold
+    console.log(chalk.blue('\n💰 Minimum Fee Threshold'));
+    console.log(chalk.gray('Set a minimum fee amount to avoid claiming tiny amounts.'));
+    console.log(chalk.gray('Fees below this threshold will be skipped to save on transaction costs.'));
+    
+    // Fetch current SOL price
+    console.log(chalk.gray('📊 Fetching current SOL price...'));
+    const solPrice = await fetchSOLPrice();
+    console.log(chalk.gray(`💲 Current SOL price: $${solPrice.toFixed(2)}`));
+    
+    const feeThresholdChoice = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'minFeeThreshold',
+        message: 'Minimum fee amount to claim (in USD, enter 0 for no limit, 0.10 for $0.10):',
+        default: '0',
+        validate: (input) => {
+          const num = parseFloat(input);
+          if (isNaN(num) || num < 0) {
+            return 'Please enter a number 0 or greater';
+          }
+          return true;
+        }
+      }
+    ]);
+    
+    const minFeeThresholdUSD = parseFloat(feeThresholdChoice.minFeeThreshold);
+    const minFeeThresholdSOL = minFeeThresholdUSD / solPrice;
+    const minFeeThreshold = Math.floor(minFeeThresholdSOL * 1e9); // Convert SOL to lamports
+    
+    if (minFeeThreshold > 0) {
+      console.log(chalk.blue(`✅ Will only claim fees ≥ $${minFeeThresholdUSD} (~${minFeeThresholdSOL.toFixed(6)} SOL at $${solPrice.toFixed(2)}/SOL)`));
+    } else {
+      console.log(chalk.blue('✅ Will claim all available fees (no minimum threshold)'));
+    }
+
     const confirmChoice = await inquirer.prompt([
       {
         type: 'confirm',
         name: 'confirm',
         message: swapToSOL ? 
-          'This will claim ALL fees from ALL positions and swap tokens to SOL. Continue?' :
-          'This will claim ALL fees from ALL positions. Continue?',
+          'This will claim ALL qualifying fees from ALL positions and swap tokens to SOL. Continue?' :
+          'This will claim ALL qualifying fees from ALL positions. Continue?',
         default: false
       }
     ]);
@@ -565,10 +625,10 @@ class MeteoraFeeClaimer {
     const spinner = ora('Processing all positions...').start();
     try {
       spinner.stop();
-      const result = await this.claimAllFees(swapToSOL, slippageBps);
+      const result = await this.claimAllFees(swapToSOL, slippageBps, minFeeThreshold, solPrice);
       
       if (result.success) {
-        console.log(chalk.green('\n🎉 All fees claimed successfully!'));
+        console.log(chalk.green('\n🎉 All qualifying fees claimed successfully!'));
         console.log(chalk.gray(`   Final Transaction: ${result.signature}`));
         if (result.feesA && result.feesA > 0) {
           console.log(chalk.gray(`   Total Fees A claimed: ${result.feesA}`));
@@ -585,21 +645,61 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async handleCloseAll(swapToSOL: boolean, slippageBps: number): Promise<void> {
-    // Get position count for confirmation
-    const positions = await this.getUserPositions();
-    const positionCount = positions.length;
+  async handleCloseAll(swapToSOL: boolean, slippageBps: number, maxFeeRate: number | null = null): Promise<void> {
+    // Get all positions
+    const allPositions = await this.getUserPositions();
 
-    if (positionCount === 0) {
+    if (allPositions.length === 0) {
       console.log(chalk.yellow('No positions found.'));
       return;
     }
 
-    console.log(chalk.red('⚠️  WARNING: This will close ALL your positions!'));
+    // Pre-filter positions by fee rate if filter is enabled
+    let eligiblePositions = allPositions;
+    if (maxFeeRate !== null) {
+      console.log(chalk.blue(`🔍 Checking fee rates for ${allPositions.length} positions...`));
+      eligiblePositions = [];
+      
+      for (let i = 0; i < allPositions.length; i++) {
+        const position = allPositions[i];
+        const positionId = position.publicKey.toString().slice(0, 8);
+        
+        try {
+          const isEligible = await this.meteoraClient.isPoolEligibleForClosing(position.account.pool, maxFeeRate);
+          if (isEligible) {
+            eligiblePositions.push(position);
+          } else {
+            console.log(chalk.gray(`   ⏭️ ${positionId}: Pool fee rate too high, skipping`));
+          }
+        } catch (error) {
+          console.log(chalk.gray(`   ⚠️ ${positionId}: Could not check fee rate, skipping`));
+        }
+        
+        // Add delay to avoid rate limits
+        if (i < allPositions.length - 1) {
+          await rateLimitDelay();
+        }
+      }
+      
+      console.log(chalk.blue(`✅ Found ${eligiblePositions.length} positions eligible for closing (fee rate ≤ ${maxFeeRate}%)`));
+    }
+
+    const positionCount = eligiblePositions.length;
+    
+    if (positionCount === 0) {
+      console.log(chalk.yellow('No positions meet the fee rate criteria.'));
+      return;
+    }
+
+    console.log(chalk.red('⚠️  WARNING: This will close your positions!'));
     console.log(chalk.yellow(`📊 Found ${positionCount} position(s) that will be processed`));
     console.log(chalk.gray('   • All fees will be claimed'));
     console.log(chalk.gray('   • All liquidity will be removed'));
     console.log(chalk.gray('   • All positions will be closed'));
+    
+    if (maxFeeRate !== null) {
+      console.log(chalk.blue(`🎯 Fee Rate Filter: Only pools with fee rate ≤ ${maxFeeRate}% (${positionCount}/${allPositions.length} positions)`));
+    }
     
     if (swapToSOL) {
       console.log(chalk.blue(`🔧 Swap to SOL: Enabled (${slippageBps} BPS slippage)`));
@@ -612,7 +712,7 @@ class MeteoraFeeClaimer {
       {
         type: 'confirm',
         name: 'confirm',
-        message: `Are you absolutely sure you want to close ALL ${positionCount} positions?`,
+        message: `Are you absolutely sure you want to close ${positionCount} position(s)?`,
         default: false
       }
     ]);
@@ -623,7 +723,7 @@ class MeteoraFeeClaimer {
     }
 
     console.log(chalk.blue('🚀 Processing positions...'));
-    const result = await this.closeAllPositions(swapToSOL, slippageBps);
+    const result = await this.closeAllPositions(swapToSOL, slippageBps, maxFeeRate, eligiblePositions);
 
     if (result.success) {
       if (swapToSOL) {
@@ -706,7 +806,7 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async closePosition(poolAddress: string, mode: 'claim-and-close' | 'remove-liquidity' | 'close-only' = 'claim-and-close', swapToSOL: boolean = false, slippageBps: number = 10): Promise<ClaimResult> {
+  async closePosition(poolAddress: string, mode: 'claim-and-close' | 'remove-liquidity' | 'close-only' = 'claim-and-close', swapToSOL: boolean = false, slippageBps: number = 10, maxFeeRate: number | null = null): Promise<ClaimResult> {
     try {
       const poolPubkey = new PublicKey(poolAddress);
 
@@ -737,6 +837,15 @@ class MeteoraFeeClaimer {
           if (!position.positionNftAccount) {
             console.log(chalk.red(`❌ No NFT account found for position ${positionId}`));
             continue;
+          }
+
+          // Check pool fee rate if filter is enabled
+          if (maxFeeRate !== null) {
+            const isEligible = await this.meteoraClient.isPoolEligibleForClosing(poolPubkey, maxFeeRate);
+            if (!isEligible) {
+              console.log(chalk.yellow(`   ⏭️ Skipping - pool fee rate too high`));
+              continue;
+            }
           }
 
           // Step 1: Claim fees if there are any and mode allows it
@@ -847,12 +956,12 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async closeAllPositions(swapToSOL: boolean = false, slippageBps: number = 10): Promise<ClaimResult> {
+  async closeAllPositions(swapToSOL: boolean = false, slippageBps: number = 10, maxFeeRate: number | null = null, preFilteredPositions?: any[]): Promise<ClaimResult> {
     try {
       console.log(chalk.blue('🔍 Scanning all positions for closing...'));
 
-      // Get all user positions across all pools
-      const allPositions = await this.getUserPositions();
+      // Use pre-filtered positions if provided, otherwise get all positions
+      const allPositions = preFilteredPositions || await this.getUserPositions();
 
       if (allPositions.length === 0) {
         return {
@@ -887,6 +996,8 @@ class MeteoraFeeClaimer {
             console.log(chalk.red(`   ❌ No NFT account found for position ${positionId}`));
             continue;
           }
+
+          // Fee rate filtering already done in pre-filtering step
 
           // Add delay before checking position state to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 300));
@@ -1409,6 +1520,7 @@ program
   .description('Claim fees from all positions with available fees')
   .option('--swap', 'Swap claimed tokens to SOL using Jupiter')
   .option('--slippage <bps>', 'Slippage tolerance in basis points (default: 10)', '10')
+  .option('--min-fee <usd>', 'Minimum fee amount to claim in USD (default: 0)', '0')
   .option('-v, --verbose', 'Show detailed output')
   .action(async (options: any) => {
     const spinner = ora('Initializing fee claimer...').start();
@@ -1421,6 +1533,15 @@ program
 
       const swapToSOL = !!options.swap;
       const slippageBps = parseInt(options.slippage);
+      const minFeeThresholdUSD = parseFloat(options.minFee);
+      
+      // Fetch current SOL price
+      spinner.text = 'Fetching current SOL price...';
+      const solPrice = await fetchSOLPrice();
+      console.log(chalk.gray(`💲 Current SOL price: $${solPrice.toFixed(2)}`));
+      
+      const minFeeThresholdSOL = minFeeThresholdUSD / solPrice;
+      const minFeeThreshold = Math.floor(minFeeThresholdSOL * 1e9); // Convert SOL to lamports
 
       if (swapToSOL) {
         spinner.text = 'Scanning all positions for claimable fees and preparing to swap...';
@@ -1428,9 +1549,14 @@ program
       } else {
         spinner.text = 'Scanning all positions for claimable fees...';
       }
+      
+      if (minFeeThreshold > 0) {
+        console.log(chalk.blue(`💰 Minimum fee threshold: $${minFeeThresholdUSD} (~${minFeeThresholdSOL.toFixed(6)} SOL at $${solPrice.toFixed(2)}/SOL)`));
+      }
+      
       spinner.stop();
 
-      const result = await claimer.claimAllFees(swapToSOL, slippageBps);
+      const result = await claimer.claimAllFees(swapToSOL, slippageBps, minFeeThreshold, solPrice);
 
       if (result.success) {
         if (swapToSOL) {

@@ -68,6 +68,78 @@ export class MeteoraClient {
         }
     }
 
+    // Helper method to calculate current fee rate as percentage
+    async getCurrentFeeRate(poolState: any): Promise<number> {
+        try {
+            // Check for poolFees object (this is where the fee config is stored)
+            if (poolState.poolFees && poolState.poolFees.baseFee) {
+                const baseFee = poolState.poolFees.baseFee;
+                
+                const cliffFeeNumerator = Number(baseFee.cliffFeeNumerator || 0);
+                const numberOfPeriod = baseFee.numberOfPeriod || 0;
+                const reductionFactor = Number(baseFee.reductionFactor || 0);
+                const periodFrequency = Number(baseFee.periodFrequency || 1);
+                const feeSchedulerMode = baseFee.feeSchedulerMode || 0;
+                
+                // Calculate elapsed periods
+                const activationPoint = Number(poolState.activationPoint || 0);
+                let elapsedPeriods = 0;
+                
+                if (activationPoint > 1000000000) {
+                    // It's a timestamp
+                    const currentTimestamp = Math.floor(Date.now() / 1000);
+                    const elapsedTime = currentTimestamp - activationPoint;
+                    elapsedPeriods = periodFrequency > 0 ? Math.floor(elapsedTime / periodFrequency) : 0;
+                } else {
+                    // It's a slot number
+                    const currentSlot = await this.connection.getSlot();
+                    const elapsedSlots = currentSlot - activationPoint;
+                    elapsedPeriods = periodFrequency > 0 ? Math.floor(elapsedSlots / periodFrequency) : 0;
+                }
+                
+                // Cap elapsed periods to the maximum number of periods
+                const effectivePeriods = Math.min(elapsedPeriods, numberOfPeriod);
+                
+                // Calculate current fee based on scheduler mode
+                let currentFeeNumerator = cliffFeeNumerator;
+                if (feeSchedulerMode === 0) { // Linear
+                    currentFeeNumerator = Math.max(0, cliffFeeNumerator - (effectivePeriods * reductionFactor));
+                } else if (feeSchedulerMode === 1) { // Exponential
+                    const reductionRate = reductionFactor / 10000;
+                    currentFeeNumerator = cliffFeeNumerator * Math.pow(1 - reductionRate, effectivePeriods);
+                }
+                
+                // Convert to percentage using the correct denominator (1 billion)
+                const FEE_DENOMINATOR = 1000000000;
+                const feePercentage = (currentFeeNumerator / FEE_DENOMINATOR) * 100;
+                
+                return Math.max(0, feePercentage);
+            } else {
+                // No fee schedule found, return a moderate fee rate as fallback
+                return 25;
+            }
+            
+        } catch (error) {
+            console.log(`   ⚠️ Could not calculate current fee rate: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return 25; // Return moderate fee rate as fallback
+        }
+    }
+
+    // Helper method to check if pool is eligible for closing based on fee rate
+    async isPoolEligibleForClosing(poolAddress: PublicKey, maxFeeRate: number = 20): Promise<boolean> {
+        try {
+            const poolState = await this.cpAmm.fetchPoolState(poolAddress);
+            const currentFeeRate = await this.getCurrentFeeRate(poolState);
+            
+            console.log(`   📊 Pool fee rate: ${currentFeeRate.toFixed(2)}% (max allowed: ${maxFeeRate}%)`);
+            
+            return currentFeeRate <= maxFeeRate;
+        } catch (error) {
+            console.log(`   ⚠️ Could not check pool eligibility: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return false; // Don't close if we can't determine eligibility
+        }
+    }
+
     async getUserPositions(userPublicKey: PublicKey, poolAddress?: PublicKey): Promise<Position[]> {
         try {
             let userPositions;

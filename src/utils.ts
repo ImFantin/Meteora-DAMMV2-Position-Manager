@@ -14,10 +14,21 @@ export function isValidPublicKey(address: string): boolean {
 }
 
 /**
- * Validates if a string is a valid base58 private key
+ * Validates if a string is a valid private key (base58 or array format)
  */
 export function isValidPrivateKey(privateKey: string): boolean {
   try {
+    // Try to parse as array format first (Solflare export format)
+    if (privateKey.trim().startsWith('[') && privateKey.trim().endsWith(']')) {
+      const keyArray = JSON.parse(privateKey.trim());
+      if (Array.isArray(keyArray) && keyArray.length === 64) {
+        // Validate all elements are numbers between 0-255
+        return keyArray.every(num => typeof num === 'number' && num >= 0 && num <= 255);
+      }
+      return false;
+    }
+    
+    // Try to parse as base58 format
     const decoded = bs58.decode(privateKey);
     return decoded.length === 64; // Solana private keys are 64 bytes
   } catch {
@@ -31,6 +42,27 @@ export function isValidPrivateKey(privateKey: string): boolean {
 export function arrayToBase58(keyArray: number[]): string {
   const uint8Array = new Uint8Array(keyArray);
   return bs58.encode(uint8Array);
+}
+
+/**
+ * Normalizes private key to Uint8Array format (supports both base58 and array formats)
+ */
+export function normalizePrivateKey(privateKey: string): Uint8Array {
+  try {
+    // Check if it's array format (Solflare export)
+    if (privateKey.trim().startsWith('[') && privateKey.trim().endsWith(']')) {
+      const keyArray = JSON.parse(privateKey.trim());
+      if (Array.isArray(keyArray) && keyArray.length === 64) {
+        return new Uint8Array(keyArray);
+      }
+      throw new Error('Invalid array format');
+    }
+    
+    // Assume it's base58 format
+    return bs58.decode(privateKey);
+  } catch (error) {
+    throw new Error(`Failed to parse private key: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 /**
@@ -64,6 +96,32 @@ export function truncateAddress(address: string, chars: number = 4): string {
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Rate limit delay to respect RPC limits (15 requests/second = ~67ms minimum)
+ */
+export function rateLimitDelay(): Promise<void> {
+  return sleep(150); // 150ms delay = ~6.7 requests/second (well under 15/second limit)
+}
+
+/**
+ * Fetch current SOL price in USD from CoinGecko API
+ */
+export async function fetchSOLPrice(): Promise<number> {
+  try {
+    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const data = await response.json();
+    
+    if (data.solana && data.solana.usd) {
+      return data.solana.usd;
+    }
+    
+    throw new Error('Invalid response format');
+  } catch (error) {
+    console.log(`⚠️  Warning: Could not fetch SOL price (${error instanceof Error ? error.message : 'Unknown error'}), using fallback price of $200`);
+    return 200; // Fallback price
+  }
 }
 
 /**
