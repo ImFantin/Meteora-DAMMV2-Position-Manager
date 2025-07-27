@@ -168,11 +168,11 @@ export class JupiterClient {
   private getPriorityFee(level: string): number {
     switch (level) {
       case 'none': return 0;
-      case 'low': return 1000000; // 0.001 SOL
+      case 'low': return 100000; // 0.0001 SOL (~$0.019)
       case 'medium': return 5000000; // 0.005 SOL
       case 'high': return 10000000; // 0.01 SOL
       case 'veryHigh': return 20000000; // 0.02 SOL
-      default: return 1000000; // Default to low
+      default: return 100000; // Default to low
     }
   }
 
