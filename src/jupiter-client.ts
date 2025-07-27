@@ -66,7 +66,7 @@ export class JupiterClient {
   async swap(
     userKeypair: Keypair,
     quoteResponse: JupiterQuote,
-    priorityLevel: 'none' | 'low' | 'medium' | 'high' | 'veryHigh' = 'medium'
+    priorityLevel: 'none' | 'low' | 'medium' | 'high' | 'veryHigh' = 'low'
   ): Promise<SwapResult> {
     try {
       const swapData = {
@@ -129,7 +129,7 @@ export class JupiterClient {
   async getSwapInstructions(
     userKeypair: Keypair,
     quoteResponse: JupiterQuote,
-    priorityLevel: 'none' | 'low' | 'medium' | 'high' | 'veryHigh' = 'medium'
+    priorityLevel: 'none' | 'low' | 'medium' | 'high' | 'veryHigh' = 'low'
   ): Promise<any> {
     try {
       const swapData = {
@@ -163,6 +163,8 @@ export class JupiterClient {
     }
   }
 
+
+
   private getPriorityFee(level: string): number {
     switch (level) {
       case 'none': return 0;
@@ -170,7 +172,7 @@ export class JupiterClient {
       case 'medium': return 5000000; // 0.005 SOL
       case 'high': return 10000000; // 0.01 SOL
       case 'veryHigh': return 20000000; // 0.02 SOL
-      default: return 5000000;
+      default: return 1000000; // Default to low
     }
   }
 
@@ -178,7 +180,7 @@ export class JupiterClient {
   isSwappableToken(mint: string): boolean {
     const SOL_MINT = 'So11111111111111111111111111111111111111112';
     const WSOL_MINT = 'So11111111111111111111111111111111111111112';
-    
+
     // Don't swap if it's already SOL/WSOL
     return mint !== SOL_MINT && mint !== WSOL_MINT;
   }
@@ -196,7 +198,7 @@ export class JupiterClient {
   ): Promise<boolean> {
     try {
       const SOL_MINT = this.getSOLMint();
-      
+
       // If it's already SOL, no need to swap
       if (!this.isSwappableToken(tokenMint)) {
         return false;
@@ -204,7 +206,7 @@ export class JupiterClient {
 
       // Get a quote to see how much SOL we'd get
       const quote = await this.getQuote(tokenMint, SOL_MINT, amount, 10);
-      
+
       if (!quote) {
         console.log(`   ⚠️ Could not get quote for ${tokenMint.slice(0, 8)}...`);
         return false;
@@ -212,13 +214,13 @@ export class JupiterClient {
 
       const outputLamports = parseInt(quote.outAmount);
       const worthSwapping = outputLamports >= minValueLamports;
-      
+
       if (worthSwapping) {
         console.log(`   💰 Token value: ${outputLamports} lamports (~$${(outputLamports / 1000000).toFixed(3)}) - Worth swapping`);
       } else {
         console.log(`   ⏭️ Token value: ${outputLamports} lamports (~$${(outputLamports / 1000000).toFixed(3)}) - Below threshold, skipping`);
       }
-      
+
       return worthSwapping;
     } catch (error) {
       console.log(`   ⚠️ Error checking token value: ${error instanceof Error ? error.message : 'Unknown error'}`);
