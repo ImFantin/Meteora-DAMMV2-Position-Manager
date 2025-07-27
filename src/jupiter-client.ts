@@ -117,11 +117,33 @@ export class JupiterClient {
         outputAmount: parseInt(quoteResponse.outAmount)
       };
 
-    } catch (error) {
-      console.error('Error executing Jupiter swap:', error);
+    } catch (error: any) {
+      // Handle specific Jupiter API errors with cleaner messages
+      if (error.response?.status === 422) {
+        return {
+          success: false,
+          error: 'No swap route found!'
+        };
+      }
+
+      if (error.response?.status === 400) {
+        return {
+          success: false,
+          error: 'Invalid swap parameters'
+        };
+      }
+
+      if (error.response?.status === 429) {
+        return {
+          success: false,
+          error: 'Rate limited, please try again later'
+        };
+      }
+
+      // For other errors, show a generic message
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown swap error'
+        error: 'Swap failed - please try again'
       };
     }
   }
