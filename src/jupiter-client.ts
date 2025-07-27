@@ -54,8 +54,11 @@ export class JupiterClient {
 
       const response = await axios.request(config);
       return response.data;
-    } catch (error) {
-      console.error('Error getting Jupiter quote:', error);
+    } catch (error: any) {
+      // Only log errors that aren't "no route found" to reduce noise
+      if (error.response?.data?.errorCode !== 'COULD_NOT_FIND_ANY_ROUTE') {
+        console.error('Error getting Jupiter quote:', error.message || error);
+      }
       return null;
     }
   }

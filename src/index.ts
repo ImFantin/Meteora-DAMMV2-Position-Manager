@@ -749,22 +749,29 @@ class MeteoraFeeClaimer {
     try {
       const positions = await this.getUserPositions();
       
-      spinner.succeed(`Found ${positions.length} position(s)`);
-      
       if (positions.length === 0) {
+        spinner.succeed('No positions found');
         console.log(chalk.yellow('No positions found.'));
         return;
       }
+
+      spinner.text = 'Calculating fee values...';
+      
+      // Get current SOL price for fee USD calculations
+      const solPrice = await fetchSOLPrice();
       
       // Calculate totals
       let totalFeesA = 0;
       let totalFeesB = 0;
       let positionsWithFees = 0;
+      let totalFeesUSD = 0;
       
       const positionsByPool = new Map<string, any[]>();
       
+      // Process each position
       for (const position of positions) {
         const poolAddress = position.account.pool.toString();
+        
         if (!positionsByPool.has(poolAddress)) {
           positionsByPool.set(poolAddress, []);
         }
@@ -780,6 +787,11 @@ class MeteoraFeeClaimer {
           positionsWithFees++;
         }
       }
+
+      // Calculate USD value of fees (simplified - just use SOL price for Token B fees)
+      totalFeesUSD = (totalFeesB / 1e9) * solPrice;
+      
+      spinner.succeed(`Found ${positions.length} position(s)`);
       
       console.log(chalk.blue('\n📊 Positions Summary:'));
       console.log('='.repeat(60));
@@ -795,6 +807,9 @@ class MeteoraFeeClaimer {
         }
         if (totalFeesB > 0) {
           console.log(chalk.gray(`   Token B fees: ${totalFeesB} lamports (~${(totalFeesB / 1e9).toFixed(6)} SOL)`));
+        }
+        if (totalFeesUSD > 0) {
+          console.log(chalk.gray(`   Estimated USD Value: ~$${totalFeesUSD.toFixed(2)}`));
         }
       } else {
         console.log(chalk.yellow('No claimable fees found.'));

@@ -46,3 +46,6 @@ coverage/
 
 # Optional eslint cache
 .eslintcache
+
+#SDK Documentation
+docs.md
