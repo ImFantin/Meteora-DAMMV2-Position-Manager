@@ -763,8 +763,14 @@ class MeteoraFeeClaimer {
       // Calculate totals
       let totalFeesA = 0;
       let totalFeesB = 0;
+      let totalDepositsA = 0;
+      let totalDepositsB = 0;
       let positionsWithFees = 0;
+      let positionsWithDeposits = 0;
       let totalFeesUSD = 0;
+      let totalDepositsUSD = 0;
+
+
       
       const positionsByPool = new Map<string, any[]>();
       
@@ -779,17 +785,26 @@ class MeteoraFeeClaimer {
         
         const feesA = position.feeOwedA || 0;
         const feesB = position.feeOwedB || 0;
+        const depositsA = position.depositA || 0;
+        const depositsB = position.depositB || 0;
         
         totalFeesA += feesA;
         totalFeesB += feesB;
+        totalDepositsA += depositsA;
+        totalDepositsB += depositsB;
         
         if (feesA > 0 || feesB > 0) {
           positionsWithFees++;
         }
+        
+        if (depositsA > 0 || depositsB > 0) {
+          positionsWithDeposits++;
+        }
       }
 
-      // Calculate USD value of fees (simplified - just use SOL price for Token B fees)
+      // Calculate USD values
       totalFeesUSD = (totalFeesB / 1e9) * solPrice;
+      totalDepositsUSD = (totalDepositsA + totalDepositsB) * solPrice;
       
       spinner.succeed(`Found ${positions.length} position(s)`);
       
@@ -797,16 +812,29 @@ class MeteoraFeeClaimer {
       console.log('='.repeat(60));
       console.log(chalk.gray(`Total Positions: ${positions.length}`));
       console.log(chalk.gray(`Positions with Fees: ${positionsWithFees}`));
+      console.log(chalk.gray(`Positions with Deposits: ${positionsWithDeposits}`));
       console.log(chalk.gray(`Unique Pools: ${positionsByPool.size}`));
       console.log();
       
+      // Display deposit information
+      if (totalDepositsA > 0 || totalDepositsB > 0) {
+        console.log(chalk.blue('💎 Total Deposits:'));
+        const totalDepositSOL = totalDepositsA + totalDepositsB;
+        console.log(chalk.gray(`   Total: ~${totalDepositSOL.toFixed(6)} SOL`));
+        if (totalDepositsUSD > 0) {
+          console.log(chalk.gray(`   Estimated USD Value: ~$${totalDepositsUSD.toFixed(2)}`));
+        }
+        console.log();
+      }
+      
+      // Display fee information
       if (totalFeesA > 0 || totalFeesB > 0) {
         console.log(chalk.green('💰 Total Claimable Fees:'));
         if (totalFeesA > 0) {
-          console.log(chalk.gray(`   Token A fees: ${totalFeesA} lamports`));
+          console.log(chalk.gray(`   Token A: ~${(totalFeesA / 1e9).toFixed(6)} SOL`));
         }
         if (totalFeesB > 0) {
-          console.log(chalk.gray(`   Token B fees: ${totalFeesB} lamports (~${(totalFeesB / 1e9).toFixed(6)} SOL)`));
+          console.log(chalk.gray(`   Token B: ~${(totalFeesB / 1e9).toFixed(6)} SOL`));
         }
         if (totalFeesUSD > 0) {
           console.log(chalk.gray(`   Estimated USD Value: ~$${totalFeesUSD.toFixed(2)}`));
@@ -1353,7 +1381,10 @@ program
       // Calculate totals
       let totalFeesA = 0;
       let totalFeesB = 0;
+      let totalDepositsA = 0;
+      let totalDepositsB = 0;
       let positionsWithFees = 0;
+      let positionsWithDeposits = 0;
       
       const positionsByPool = new Map<string, any[]>();
       
@@ -1366,12 +1397,20 @@ program
         
         const feesA = position.feeOwedA || 0;
         const feesB = position.feeOwedB || 0;
+        const depositsA = position.depositA || 0;
+        const depositsB = position.depositB || 0;
         
         totalFeesA += feesA;
         totalFeesB += feesB;
+        totalDepositsA += depositsA;
+        totalDepositsB += depositsB;
         
         if (feesA > 0 || feesB > 0) {
           positionsWithFees++;
+        }
+        
+        if (depositsA > 0 || depositsB > 0) {
+          positionsWithDeposits++;
         }
       }
       
@@ -1379,16 +1418,25 @@ program
       console.log('='.repeat(80));
       console.log(chalk.gray(`Total Positions: ${positions.length}`));
       console.log(chalk.gray(`Positions with Fees: ${positionsWithFees}`));
+      console.log(chalk.gray(`Positions with Deposits: ${positionsWithDeposits}`));
       console.log(chalk.gray(`Unique Pools: ${positionsByPool.size}`));
       console.log();
+      
+      // Display deposit information
+      if (totalDepositsA > 0 || totalDepositsB > 0) {
+        console.log(chalk.blue('💎 Total Deposits:'));
+        const totalDepositSOL = totalDepositsA + totalDepositsB;
+        console.log(chalk.gray(`   Total: ~${totalDepositSOL.toFixed(6)} SOL`));
+        console.log();
+      }
       
       if (totalFeesA > 0 || totalFeesB > 0) {
         console.log(chalk.green('💰 Total Claimable Fees:'));
         if (totalFeesA > 0) {
-          console.log(chalk.gray(`   Token A fees: ${totalFeesA} lamports`));
+          console.log(chalk.gray(`   Token A: ~${(totalFeesA / 1e9).toFixed(6)} SOL`));
         }
         if (totalFeesB > 0) {
-          console.log(chalk.gray(`   Token B fees: ${totalFeesB} lamports (~${(totalFeesB / 1e9).toFixed(6)} SOL)`));
+          console.log(chalk.gray(`   Token B: ~${(totalFeesB / 1e9).toFixed(6)} SOL`));
         }
         console.log();
         console.log(chalk.blue('💡 Run "npm run claim-all" to claim all available fees'));

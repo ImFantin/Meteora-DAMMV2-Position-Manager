@@ -28,7 +28,7 @@ export class JupiterClient {
 
   constructor(connection: Connection) {
     this.connection = connection;
-    this.baseUrl = 'https://lite-api.jup.ag/swap/v1';
+    this.baseUrl = 'https://quote-api.jup.ag/v6';
   }
 
   async getQuote(
@@ -38,26 +38,26 @@ export class JupiterClient {
     slippageBps: number = 10
   ): Promise<JupiterQuote | null> {
     try {
-      const config = {
-        method: 'get',
-        url: `${this.baseUrl}/quote`,
-        params: {
-          inputMint,
-          outputMint,
-          amount: amount.toString(),
-          slippageBps,
-        },
+      const params = new URLSearchParams({
+        inputMint,
+        outputMint,
+        amount: amount.toString(),
+        slippageBps: slippageBps.toString(),
+        onlyDirectRoutes: 'false',
+        asLegacyTransaction: 'false'
+      });
+
+      const response = await axios.get(`${this.baseUrl}/quote?${params.toString()}`, {
         headers: {
           'Accept': 'application/json'
         }
-      };
+      });
 
-      const response = await axios.request(config);
       return response.data;
     } catch (error: any) {
       // Only log errors that aren't "no route found" to reduce noise
-      if (error.response?.data?.errorCode !== 'COULD_NOT_FIND_ANY_ROUTE') {
-        console.error('Error getting Jupiter quote:', error.message || error);
+      if (error.response?.data?.error !== 'No routes found') {
+        console.error('Error getting Jupiter quote:', error.response?.data || error.message || error);
       }
       return null;
     }
@@ -72,26 +72,20 @@ export class JupiterClient {
       const swapData = {
         userPublicKey: userKeypair.publicKey.toString(),
         quoteResponse,
-        prioritizationFeeLamports: {
-          priorityLevelWithMaxLamports: {
-            maxLamports: this.getPriorityFee(priorityLevel),
-            priorityLevel
-          }
-        },
-        dynamicComputeUnitLimit: true
+        prioritizationFeeLamports: this.getPriorityFee(priorityLevel),
+        dynamicComputeUnitLimit: true,
+        dynamicSlippage: {
+          maxBps: 300 // 3% max slippage
+        }
       };
 
-      const config = {
-        method: 'post',
-        url: `${this.baseUrl}/swap`,
+      const response = await axios.post('https://quote-api.jup.ag/v6/swap', swapData, {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        },
-        data: swapData
-      };
+        }
+      });
 
-      const response = await axios.request(config);
       const { swapTransaction } = response.data;
 
       // Deserialize the transaction
@@ -107,8 +101,13 @@ export class JupiterClient {
         preflightCommitment: 'confirmed'
       });
 
-      // Wait for confirmation
-      await this.connection.confirmTransaction(signature, 'confirmed');
+      // Wait for confirmation with proper blockhash
+      const latestBlockhash = await this.connection.getLatestBlockhash();
+      await this.connection.confirmTransaction({
+        signature,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
+      }, 'confirmed');
 
       return {
         success: true,
@@ -118,6 +117,13 @@ export class JupiterClient {
       };
 
     } catch (error: any) {
+      // Log the actual error details for debugging
+      console.log(`Jupiter swap error details:`, {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      });
+
       // Handle specific Jupiter API errors with cleaner messages
       if (error.response?.status === 422) {
         return {
@@ -157,26 +163,17 @@ export class JupiterClient {
       const swapData = {
         userPublicKey: userKeypair.publicKey.toString(),
         quoteResponse,
-        prioritizationFeeLamports: {
-          priorityLevelWithMaxLamports: {
-            maxLamports: this.getPriorityFee(priorityLevel),
-            priorityLevel
-          }
-        },
+        prioritizationFeeLamports: this.getPriorityFee(priorityLevel),
         dynamicComputeUnitLimit: true
       };
 
-      const config = {
-        method: 'post',
-        url: `${this.baseUrl}/swap-instructions`,
+      const response = await axios.post('https://quote-api.jup.ag/v6/swap-instructions', swapData, {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        },
-        data: swapData
-      };
+        }
+      });
 
-      const response = await axios.request(config);
       return response.data;
 
     } catch (error) {

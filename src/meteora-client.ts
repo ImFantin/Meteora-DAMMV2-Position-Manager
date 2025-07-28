@@ -9,6 +9,8 @@ export interface Position {
     account: any;
     feeOwedA: number;
     feeOwedB: number;
+    depositA: number; // Token A deposit amount
+    depositB: number; // Token B deposit amount
     positionNftAccount?: PublicKey; // The NFT account for this position
 }
 
@@ -156,6 +158,9 @@ export class MeteoraClient {
                 userPositions = await this.cpAmm.getPositionsByUser(userPublicKey);
             }
 
+            // Add delay after fetching positions to avoid overwhelming RPC
+            await new Promise(resolve => setTimeout(resolve, 200));
+
             if (!userPositions || userPositions.length === 0) {
                 return [];
             }
@@ -179,15 +184,39 @@ export class MeteoraClient {
                     const feeOwedA = unclaimedFees.feeTokenA.toNumber();
                     const feeOwedB = unclaimedFees.feeTokenB.toNumber();
 
+                    // Use getWithdrawQuote to get token amounts from position (working approach)
+                    const { depositA, depositB } = await this.getPositionTokenAmounts(position, poolState);
+                    
+                    // Only convert Token B to SOL (Token A often has decimal issues)
+                    let depositBInSOL = 0;
+                    const SOL_MINT = this.jupiterClient.getSOLMint();
+                    
+                    if (poolState.tokenBMint.toString() === SOL_MINT) {
+                        depositBInSOL = depositB / 1e9;
+                    } else {
+                        try {
+                            const quote = await this.jupiterClient.getQuote(poolState.tokenBMint.toString(), SOL_MINT, depositB, 50);
+                            if (quote) depositBInSOL = parseInt(quote.outAmount) / 1e9;
+                        } catch {}
+                    }
+                    
+                    // Only count Token A if it's actually SOL (avoid conversion issues)
+                    let depositAInSOL = 0;
+                    if (poolState.tokenAMint.toString() === SOL_MINT && depositA > 0) {
+                        depositAInSOL = depositA / 1e9;
+                    }
+                    // For non-SOL Token A, we skip it to avoid decimal/conversion issues
 
-
-                    await new Promise(resolve => setTimeout(resolve, 50));
+                    // Increased delay between position processing to respect RPC limits
+                    await new Promise(resolve => setTimeout(resolve, 150));
 
                     positions.push({
                         publicKey: positionPubkey,
                         account: position,
                         feeOwedA,
                         feeOwedB,
+                        depositA: depositAInSOL, // Store as SOL equivalent
+                        depositB: depositBInSOL, // Store as SOL equivalent
                         positionNftAccount: positionInfo.positionNftAccount // Store the NFT account for later use
                     });
                 } catch (positionError) {
@@ -219,6 +248,9 @@ export class MeteoraClient {
             if (!poolState || !positionState) {
                 throw new Error('Could not fetch pool or position state');
             }
+
+            // Small delay to avoid overwhelming RPC with rapid requests
+            await new Promise(resolve => setTimeout(resolve, 100));
 
             // Position state retrieved
 
@@ -307,6 +339,9 @@ export class MeteoraClient {
                 preflightCommitment: 'confirmed'
             });
 
+            // Small delay before confirmation to reduce RPC load
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
             // Wait for confirmation
             const confirmation = await this.connection.confirmTransaction({
                 signature,
@@ -451,8 +486,13 @@ export class MeteoraClient {
                 preflightCommitment: 'confirmed',
             });
 
-            // Wait for confirmation
-            await this.connection.confirmTransaction(signature, 'confirmed');
+            // Wait for confirmation with proper blockhash
+            const latestBlockhash = await this.connection.getLatestBlockhash();
+            await this.connection.confirmTransaction({
+                signature,
+                blockhash: latestBlockhash.blockhash,
+                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
+            }, 'confirmed');
             console.log(`✅ Liquidity removed successfully`);
 
             return signature;
@@ -870,6 +910,170 @@ export class MeteoraClient {
 
         return swapResults;
     }
+
+    /**
+     * Get token amounts from position using getWithdrawQuote
+     */
+    private async getPositionTokenAmounts(position: any, poolState: any): Promise<{ depositA: number; depositB: number }> {
+        try {
+            const totalLiquidity = position.unlockedLiquidity
+                .add(position.vestedLiquidity)
+                .add(position.permanentLockedLiquidity || new BN(0));
+
+            if (totalLiquidity.isZero()) {
+                return { depositA: 0, depositB: 0 };
+            }
+
+            const withdrawQuote = await this.cpAmm.getWithdrawQuote({
+                liquidityDelta: totalLiquidity,
+                sqrtPrice: poolState.sqrtPrice,
+                maxSqrtPrice: poolState.sqrtMaxPrice,
+                minSqrtPrice: poolState.sqrtMinPrice,
+            });
+
+            let depositA = 0;
+            let depositB = 0;
+
+            try {
+                depositA = withdrawQuote.outAmountA.toNumber();
+            } catch {
+                const str = withdrawQuote.outAmountA.toString();
+                if (str.length <= 15) depositA = parseInt(str);
+            }
+
+            try {
+                depositB = withdrawQuote.outAmountB.toNumber();
+            } catch {
+                const str = withdrawQuote.outAmountB.toString();
+                if (str.length <= 15) depositB = parseInt(str);
+            }
+
+            return { depositA, depositB };
+        } catch {
+            return { depositA: 0, depositB: 0 };
+        }
+    }
+
+    /**
+     * Convert token amounts to SOL using Jupiter
+     */
+    private async convertTokensToSOL(
+        tokenAAmount: number,
+        tokenBAmount: number,
+        tokenAMint: any,
+        tokenBMint: any
+    ): Promise<{ depositAInSOL: number; depositBInSOL: number }> {
+        const SOL_MINT = this.jupiterClient.getSOLMint();
+        let depositAInSOL = 0;
+        let depositBInSOL = 0;
+
+        // Convert Token A
+        if (tokenAAmount > 0) {
+            if (tokenAMint.toString() === SOL_MINT) {
+                depositAInSOL = tokenAAmount / 1e9;
+            } else {
+                try {
+                    const quote = await this.jupiterClient.getQuote(tokenAMint.toString(), SOL_MINT, tokenAAmount, 50);
+                    if (quote) depositAInSOL = parseInt(quote.outAmount) / 1e9;
+                } catch {}
+            }
+        }
+
+        // Convert Token B
+        if (tokenBAmount > 0) {
+            if (tokenBMint.toString() === SOL_MINT) {
+                depositBInSOL = tokenBAmount / 1e9;
+            } else {
+                try {
+                    const quote = await this.jupiterClient.getQuote(tokenBMint.toString(), SOL_MINT, tokenBAmount, 50);
+                    if (quote) depositBInSOL = parseInt(quote.outAmount) / 1e9;
+                } catch {}
+            }
+        }
+
+        return { depositAInSOL, depositBInSOL };
+    }
+
+    /**
+     * Get user's token balances for a pool and convert to SOL using Jupiter API
+     */
+    private async getTokenBalancesInSOL(
+        userPublicKey: PublicKey,
+        tokenAMint: any,
+        tokenBMint: any
+    ): Promise<{ depositAInSOL: number; depositBInSOL: number }> {
+        try {
+            const SOL_MINT = this.jupiterClient.getSOLMint();
+            let depositAInSOL = 0;
+            let depositBInSOL = 0;
+
+            // Get Token A balance
+            try {
+                const tokenAAccount = getAssociatedTokenAddressSync(
+                    tokenAMint,
+                    userPublicKey
+                );
+                const accountInfoA = await getAccount(this.connection, tokenAAccount);
+                const balanceA = Number(accountInfoA.amount);
+
+                if (balanceA > 0) {
+                    if (tokenAMint.toString() !== SOL_MINT) {
+                        // Convert to SOL using Jupiter
+                        const quoteA = await this.jupiterClient.getQuote(
+                            tokenAMint.toString(),
+                            SOL_MINT,
+                            balanceA,
+                            50
+                        );
+                        if (quoteA) {
+                            depositAInSOL = parseInt(quoteA.outAmount) / 1e9;
+                        }
+                    } else {
+                        depositAInSOL = balanceA / 1e9;
+                    }
+                }
+            } catch {
+                // Token account doesn't exist or other error
+                depositAInSOL = 0;
+            }
+
+            // Get Token B balance
+            try {
+                const tokenBAccount = getAssociatedTokenAddressSync(
+                    tokenBMint,
+                    userPublicKey
+                );
+                const accountInfoB = await getAccount(this.connection, tokenBAccount);
+                const balanceB = Number(accountInfoB.amount);
+
+                if (balanceB > 0) {
+                    if (tokenBMint.toString() !== SOL_MINT) {
+                        // Convert to SOL using Jupiter
+                        const quoteB = await this.jupiterClient.getQuote(
+                            tokenBMint.toString(),
+                            SOL_MINT,
+                            balanceB,
+                            50
+                        );
+                        if (quoteB) {
+                            depositBInSOL = parseInt(quoteB.outAmount) / 1e9;
+                        }
+                    } else {
+                        depositBInSOL = balanceB / 1e9;
+                    }
+                }
+            } catch {
+                // Token account doesn't exist or other error
+                depositBInSOL = 0;
+            }
+
+            return { depositAInSOL, depositBInSOL };
+        } catch (error) {
+            // If conversion fails, return 0
+            return { depositAInSOL: 0, depositBInSOL: 0 };
+        }
+    }
+
 
 
 }

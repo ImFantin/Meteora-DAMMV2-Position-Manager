@@ -1,4 +1,4 @@
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, Connection } from '@solana/web3.js';
 import bs58 from 'bs58';
 
 /**
@@ -27,7 +27,7 @@ export function isValidPrivateKey(privateKey: string): boolean {
       }
       return false;
     }
-    
+
     // Try to parse as base58 format
     const decoded = bs58.decode(privateKey);
     return decoded.length === 64; // Solana private keys are 64 bytes
@@ -57,7 +57,7 @@ export function normalizePrivateKey(privateKey: string): Uint8Array {
       }
       throw new Error('Invalid array format');
     }
-    
+
     // Assume it's base58 format
     return bs58.decode(privateKey);
   } catch (error) {
@@ -99,28 +99,62 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Rate limit delay to respect RPC limits (15 requests/second = ~67ms minimum)
+ * Adaptive rate limiting based on operation type
+ * Different operations have different RPC call patterns
  */
-export function rateLimitDelay(): Promise<void> {
-  return sleep(150); // 150ms delay = ~6.7 requests/second (well under 15/second limit)
+export function rateLimitDelay(operationType: 'light' | 'medium' | 'heavy' = 'medium'): Promise<void> {
+  const delays = {
+    light: 200,   // Simple queries (200ms = 5 req/sec)
+    medium: 500,  // Standard operations (500ms = 2 req/sec) 
+    heavy: 1000   // Complex operations like position processing (1000ms = 1 req/sec)
+  };
+
+  return sleep(delays[operationType]);
 }
 
 /**
- * Fetch current SOL price in USD from CoinGecko API
+ * Fetch current SOL price in USD from CoinGecko API with retry logic
  */
 export async function fetchSOLPrice(): Promise<number> {
+  const fallbackPrice = 200;
+
   try {
-    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-    const data = await response.json();
-    
-    if (data.solana && data.solana.usd) {
-      return data.solana.usd;
-    }
-    
-    throw new Error('Invalid response format');
+    return await retry(async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+
+      try {
+        const response = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+          {
+            signal: controller.signal,
+            headers: {
+              'Accept': 'application/json',
+              'User-Agent': 'meteora-position-manager/1.0.0'
+            }
+          }
+        );
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.solana && typeof data.solana.usd === 'number' && data.solana.usd > 0) {
+          return data.solana.usd;
+        }
+
+        throw new Error('Invalid response format or price data');
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }, 2, 1000); // 2 retries with 1 second delay
   } catch (error) {
-    console.log(`⚠️  Warning: Could not fetch SOL price (${error instanceof Error ? error.message : 'Unknown error'}), using fallback price of $200`);
-    return 200; // Fallback price
+    console.log(`⚠️  Warning: Could not fetch SOL price after retries (${error instanceof Error ? error.message : 'Unknown error'}), using fallback price of $${fallbackPrice}`);
+    return fallbackPrice;
   }
 }
 
@@ -133,20 +167,79 @@ export async function retry<T>(
   delay: number = 1000
 ): Promise<T> {
   let lastError: Error;
-  
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await fn();
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Unknown error');
-      
+
       if (attempt === maxAttempts) {
         throw lastError;
       }
-      
+
       await sleep(delay * attempt); // Exponential backoff
     }
   }
-  
+
   throw lastError!;
+}
+
+/**
+ * Modern transaction confirmation utility
+ * Uses the recommended blockhash-based confirmation method
+ */
+export async function confirmTransactionModern(
+  connection: Connection,
+  signature: string,
+  blockhash?: string,
+  commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed'
+): Promise<void> {
+  if (blockhash) {
+    // Use the provided blockhash
+    const latestBlockhash = await connection.getLatestBlockhash();
+    await connection.confirmTransaction({
+      signature,
+      blockhash,
+      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
+    }, commitment);
+  } else {
+    // Get fresh blockhash
+    const latestBlockhash = await connection.getLatestBlockhash();
+    await connection.confirmTransaction({
+      signature,
+      blockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
+    }, commitment);
+  }
+}
+
+/**
+ * Check RPC connection health and performance
+ */
+export async function checkConnectionHealth(connection: Connection): Promise<{
+  healthy: boolean;
+  latency: number;
+  blockHeight: number;
+  error?: string;
+}> {
+  const startTime = Date.now();
+
+  try {
+    const blockHeight = await connection.getBlockHeight();
+    const latency = Date.now() - startTime;
+
+    return {
+      healthy: latency < 5000, // Consider healthy if response < 5 seconds
+      latency,
+      blockHeight
+    };
+  } catch (error) {
+    return {
+      healthy: false,
+      latency: Date.now() - startTime,
+      blockHeight: 0,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
 }
