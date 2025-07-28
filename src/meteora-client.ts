@@ -181,16 +181,41 @@ export class MeteoraClient {
 
                     // Calculate actual claimable fees using the SDK helper function
                     const unclaimedFees = getUnClaimReward(poolState, position);
-                    const feeOwedA = unclaimedFees.feeTokenA.toNumber();
-                    const feeOwedB = unclaimedFees.feeTokenB.toNumber();
+                    const rawFeeOwedA = unclaimedFees.feeTokenA.toNumber();
+                    const rawFeeOwedB = unclaimedFees.feeTokenB.toNumber();
 
                     // Use getWithdrawQuote to get token amounts from position (working approach)
                     const { depositA, depositB } = await this.getPositionTokenAmounts(position, poolState);
                     
-                    // Only convert Token B to SOL (Token A often has decimal issues)
-                    let depositBInSOL = 0;
                     const SOL_MINT = this.jupiterClient.getSOLMint();
                     
+                    // Convert fees to SOL equivalent (in lamports for consistency)
+                    let feeOwedAInLamports = 0;
+                    let feeOwedBInLamports = 0;
+                    
+                    // Convert Token A fees to SOL equivalent
+                    if (rawFeeOwedA > 0) {
+                        if (poolState.tokenAMint.toString() === SOL_MINT) {
+                            feeOwedAInLamports = rawFeeOwedA; // Already in lamports
+                        } else {
+                            // For non-SOL tokens, skip conversion to avoid decimal issues
+                            // This prevents the large number problem
+                            feeOwedAInLamports = 0;
+                        }
+                    }
+                    
+                    // Convert Token B fees to SOL equivalent  
+                    if (rawFeeOwedB > 0) {
+                        if (poolState.tokenBMint.toString() === SOL_MINT) {
+                            feeOwedBInLamports = rawFeeOwedB; // Already in lamports
+                        } else {
+                            // For non-SOL tokens, skip conversion to avoid decimal issues
+                            feeOwedBInLamports = 0;
+                        }
+                    }
+                    
+                    // Convert deposits to SOL equivalent
+                    let depositBInSOL = 0;
                     if (poolState.tokenBMint.toString() === SOL_MINT) {
                         depositBInSOL = depositB / 1e9;
                     } else {
@@ -200,12 +225,11 @@ export class MeteoraClient {
                         } catch {}
                     }
                     
-                    // Only count Token A if it's actually SOL (avoid conversion issues)
+                    // Only count Token A deposits if it's actually SOL (avoid conversion issues)
                     let depositAInSOL = 0;
                     if (poolState.tokenAMint.toString() === SOL_MINT && depositA > 0) {
                         depositAInSOL = depositA / 1e9;
                     }
-                    // For non-SOL Token A, we skip it to avoid decimal/conversion issues
 
                     // Increased delay between position processing to respect RPC limits
                     await new Promise(resolve => setTimeout(resolve, 150));
@@ -213,8 +237,8 @@ export class MeteoraClient {
                     positions.push({
                         publicKey: positionPubkey,
                         account: position,
-                        feeOwedA,
-                        feeOwedB,
+                        feeOwedA: feeOwedAInLamports, // Store as lamports for consistency
+                        feeOwedB: feeOwedBInLamports, // Store as lamports for consistency
                         depositA: depositAInSOL, // Store as SOL equivalent
                         depositB: depositBInSOL, // Store as SOL equivalent
                         positionNftAccount: positionInfo.positionNftAccount // Store the NFT account for later use
