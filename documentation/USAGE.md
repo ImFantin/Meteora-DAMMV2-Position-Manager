@@ -36,19 +36,19 @@ PRIVATE_KEY=your_base58_private_key_here
 
 # Additional wallets (optional)
 PRIVATE_KEY_2=your_second_wallet_here
-PRIVATE_KEY_3=[123,45,67,89,101,112,131,145...]  # Solflare array format
+PRIVATE_KEY_3=[1,2,3,4,5...]  # Solflare array format
 ```
 
 ### Private Key Formats
 
 **Base58 Format (Most Common):**
 ```
-PRIVATE_KEY=5Kb8kLf4o6GjMDP58u3LF8BXAHy9v7GuvCz3rEqAh7yMBanNa9DMugjYMQL6FG3ntHWW4wjukinABcD2fGpVbtHG
+PRIVATE_KEY=your_actual_64_character_base58_private_key_from_your_wallet
 ```
 
 **Solflare Array Format:**
 ```
-PRIVATE_KEY_2=[123,45,67,89,101,112,131,145,156,167,178,189,200,211,222,233,244,255,10,21,32,43,54,65,76,87,98,109,120,131,142,153,164,175,186,197,208,219,230,241,252,7,18,29,40,51,62,73,84,95,106,117,128,139,150,161,172,183,194,205,216,227,238,249]
+PRIVATE_KEY_2=[1,2,3,4,5,6,7,8,9,10,...64_numbers_total]
 ```
 
 ## Usage Modes
@@ -123,9 +123,9 @@ When multiple wallets are detected:
 ```
 🔑 Found 3 wallets in configuration
 √ Select wallet to use: 
-  Wallet 1 - 7xKXtg2C...d5nAuiXvF
-  Wallet 2 - 9mWxQoZ3...k8LpMnOpQ
-  Wallet 3 - 5Kb8kLf4...BcD2fGpVb
+  Wallet 1 - AbC123...Xyz789
+  Wallet 2 - DeF456...Uvw012
+  Wallet 3 - GhI789...Rst345
 ```
 
 **Features:**
@@ -149,6 +149,7 @@ When multiple wallets are detected:
 
 ### Global Options
 - `--min-fee <usd>` - Minimum fee amount in USD (default: 0)
+- `--max-deposit <usd>` - Maximum deposit amount in USD to close (positions with higher deposits will be skipped)
 - `--swap` - Enable automatic token swapping to SOL
 - `--slippage <bps>` - Slippage tolerance in basis points (default: 10)
 - `--confirm` - Skip confirmation prompts
@@ -163,6 +164,11 @@ node dist/index.js claim-all --min-fee 10.00
 **Close all positions with 0.5% slippage:**
 ```bash
 node dist/index.js close-all-fast --swap --slippage 50
+```
+
+**Close positions with small deposits only:**
+```bash
+node dist/index.js close-all --max-deposit 50 --swap
 ```
 
 **Automated closing (no prompts):**

@@ -50,7 +50,8 @@ export class JupiterClient {
       const response = await axios.get(`${this.baseUrl}/quote?${params.toString()}`, {
         headers: {
           'Accept': 'application/json'
-        }
+        },
+        timeout: 10000 // 10 second timeout for quote requests
       });
 
       return response.data;
@@ -83,7 +84,8 @@ export class JupiterClient {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        }
+        },
+        timeout: 15000 // 15 second timeout for swap requests
       });
 
       const { swapTransaction } = response.data;
@@ -146,6 +148,13 @@ export class JupiterClient {
         };
       }
 
+      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+        return {
+          success: false,
+          error: 'Request timed out, please try again'
+        };
+      }
+
       // For other errors, show a generic message
       return {
         success: false,
@@ -171,7 +180,8 @@ export class JupiterClient {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        }
+        },
+        timeout: 15000 // 15 second timeout for swap instruction requests
       });
 
       return response.data;

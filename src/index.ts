@@ -497,37 +497,92 @@ class MeteoraFeeClaimer {
             slippageBps = parseInt(slippageChoice.slippage);
           }
 
-          // Ask for fee rate threshold
-          console.log(chalk.blue('\n🎯 Fee Rate Filtering'));
-          console.log(chalk.gray('Meteora pools start at 50% fees and decay over time.'));
-          console.log(chalk.gray('You can filter to only close positions in pools with lower fees.'));
+          // Ask user to choose filtering method
+          console.log(chalk.blue('\n🔍 Position Filtering Options'));
+          console.log(chalk.gray('Choose how to filter which positions to close:'));
           
-          const feeRateChoice = await inquirer.prompt([
+          const filterChoice = await inquirer.prompt([
             {
-              type: 'input',
-              name: 'maxFeeRate',
-              message: 'Close positions in pools with fees ≤ X% (enter 100 for all pools, 20 to close pools ≤20%, 10 to close pools ≤10%):',
-              default: '100',
-              validate: (input) => {
-                const num = parseFloat(input);
-                if (isNaN(num) || num < 0 || num > 100) {
-                  return 'Please enter a number between 0 and 100';
-                }
-                return true;
-              }
+              type: 'list',
+              name: 'filterType',
+              message: 'How would you like to filter positions?',
+              choices: [
+                { name: '🎯 Filter by Pool Fee Rate (close positions in pools ≤ X%)', value: 'fee' },
+                { name: '💎 Filter by Deposit Amount (close positions ≤ $X USD)', value: 'deposit' },
+                { name: '🚀 Close All Positions (no filtering)', value: 'none' },
+                { name: '⬅️  Back to Main Menu', value: 'back' }
+              ]
             }
           ]);
           
-          const feeRateValue = parseFloat(feeRateChoice.maxFeeRate);
-          const maxFeeRate = feeRateValue < 100 ? feeRateValue : null;
+          if (filterChoice.filterType === 'back') {
+            continue; // Go back to main menu
+          }
           
-          if (maxFeeRate !== null) {
+          let maxFeeRate: number | null = null;
+          let maxDeposit: number | null = null;
+          
+          if (filterChoice.filterType === 'fee') {
+            // Fee rate filtering
+            console.log(chalk.blue('\n🎯 Fee Rate Filtering'));
+            console.log(chalk.gray('Meteora pools start at 50% fees and decay over time.'));
+            console.log(chalk.gray('You can filter to only close positions in pools with lower fees.'));
+            
+            const feeRateChoice = await inquirer.prompt([
+              {
+                type: 'input',
+                name: 'maxFeeRate',
+                message: 'Close positions in pools with fees ≤ X% (20 for ≤20%, 15 for ≤15%, 10 for ≤10%):',
+                default: '20',
+                validate: (input) => {
+                  const num = parseFloat(input);
+                  if (isNaN(num) || num < 0 || num > 100) {
+                    return 'Please enter a number between 0 and 100';
+                  }
+                  return true;
+                }
+              }
+            ]);
+            
+            maxFeeRate = parseFloat(feeRateChoice.maxFeeRate);
             console.log(chalk.blue(`✅ Will close positions in pools with fees ≤ ${maxFeeRate}% (pools with higher fees will be skipped)`));
+            
+          } else if (filterChoice.filterType === 'deposit') {
+            // Deposit amount filtering
+            console.log(chalk.blue('\n💎 Deposit Amount Filtering'));
+            console.log(chalk.gray('Filter positions based on their deposit value in USD.'));
+            console.log(chalk.gray('This helps you target dust positions or specific size ranges.'));
+            
+            const depositFilterChoice = await inquirer.prompt([
+              {
+                type: 'input',
+                name: 'maxDeposit',
+                message: 'Close positions with deposits ≤ $X USD (1 for ≤$1, 5 for ≤$5, 10 for ≤$10):',
+                default: '5',
+                validate: (input) => {
+                  const num = parseFloat(input);
+                  if (isNaN(num) || num <= 0) {
+                    return 'Please enter a number greater than 0';
+                  }
+                  return true;
+                }
+              }
+            ]);
+            
+            const maxDepositUSD = parseFloat(depositFilterChoice.maxDeposit);
+            
+            // Convert USD to SOL using current SOL price
+            const solPrice = await fetchSOLPrice();
+            maxDeposit = maxDepositUSD / solPrice;
+            console.log(chalk.gray(`   Converting $${maxDepositUSD} USD to ${maxDeposit.toFixed(6)} SOL (at $${solPrice.toFixed(2)}/SOL)`));
+            console.log(chalk.blue(`✅ Will close positions with deposits ≤ $${maxDepositUSD} USD (~${maxDeposit.toFixed(6)} SOL)`));
+            
           } else {
-            console.log(chalk.blue('✅ Will close positions in all pools (no fee rate filtering)'));
+            // No filtering
+            console.log(chalk.blue('✅ Will close ALL positions (no filtering)'));
           }
 
-          await this.handleCloseAll(swapChoice.swapToSOL, slippageBps, maxFeeRate);
+          await this.handleCloseAll(swapChoice.swapToSOL, slippageBps, maxFeeRate, maxDeposit);
           continue;
         }
 
@@ -645,7 +700,7 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async handleCloseAll(swapToSOL: boolean, slippageBps: number, maxFeeRate: number | null = null): Promise<void> {
+  async handleCloseAll(swapToSOL: boolean, slippageBps: number, maxFeeRate: number | null = null, maxDeposit: number | null = null): Promise<void> {
     // Get all positions
     const allPositions = await this.getUserPositions();
 
@@ -684,10 +739,42 @@ class MeteoraFeeClaimer {
       console.log(chalk.blue(`✅ Found ${eligiblePositions.length} positions eligible for closing (fee rate ≤ ${maxFeeRate}%)`));
     }
 
+    // Further filter positions by deposit amount if filter is enabled
+    if (maxDeposit !== null) {
+      // Get current SOL price for USD conversion in display
+      const solPrice = await fetchSOLPrice();
+      const maxDepositUSD = maxDeposit * solPrice;
+      
+      console.log(chalk.blue(`💎 Filtering positions by deposit amount ≤ $${maxDepositUSD.toFixed(2)} USD (~${maxDeposit.toFixed(6)} SOL)...`));
+      const beforeDepositFilter = eligiblePositions.length;
+      
+      eligiblePositions = eligiblePositions.filter(position => {
+        const totalDeposit = (position.depositA || 0) + (position.depositB || 0);
+        const positionId = position.publicKey.toString().slice(0, 8);
+        const totalDepositUSD = totalDeposit * solPrice;
+        
+        if (totalDeposit <= maxDeposit) {
+          return true;
+        } else {
+          console.log(chalk.gray(`   ⏭️ ${positionId}: Deposit $${totalDepositUSD.toFixed(2)} USD > $${maxDepositUSD.toFixed(2)} USD, skipping`));
+          return false;
+        }
+      });
+      
+      console.log(chalk.blue(`✅ Found ${eligiblePositions.length} positions with deposits ≤ $${maxDepositUSD.toFixed(2)} USD (${beforeDepositFilter - eligiblePositions.length} filtered out)`));
+    }
+
     const positionCount = eligiblePositions.length;
     
     if (positionCount === 0) {
-      console.log(chalk.yellow('No positions meet the fee rate criteria.'));
+      const filterMessage = maxFeeRate !== null && maxDeposit !== null 
+        ? 'No positions meet both the fee rate and deposit criteria.'
+        : maxFeeRate !== null 
+        ? 'No positions meet the fee rate criteria.'
+        : maxDeposit !== null
+        ? 'No positions meet the deposit criteria.'
+        : 'No positions found.';
+      console.log(chalk.yellow(filterMessage));
       return;
     }
 
@@ -723,7 +810,7 @@ class MeteoraFeeClaimer {
     }
 
     console.log(chalk.blue('🚀 Processing positions...'));
-    const result = await this.closeAllPositions(swapToSOL, slippageBps, maxFeeRate, eligiblePositions);
+    const result = await this.closeAllPositions(swapToSOL, slippageBps, maxFeeRate, null, eligiblePositions);
 
     if (result.success) {
       if (swapToSOL) {
@@ -842,6 +929,21 @@ class MeteoraFeeClaimer {
       } else {
         console.log(chalk.yellow('No claimable fees found.'));
       }
+      
+      // Add Total Summary (Deposits + Fees)
+      const totalDepositSOL = totalDepositsA + totalDepositsB;
+      const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+      const totalValueSOL = totalDepositSOL + totalFeeSOL;
+      const totalValueUSD = totalDepositsUSD + totalFeesUSD;
+      
+      console.log();
+      console.log(chalk.magenta('🏆 Total Portfolio Value (Deposits + Fees):'));
+      console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${totalFeeSOL.toFixed(6)} SOL`));
+      console.log(chalk.gray(`   Grand Total: ~${totalValueSOL.toFixed(6)} SOL`));
+      if (totalValueUSD > 0) {
+        console.log(chalk.gray(`   Estimated USD Value: ~$${totalValueUSD.toFixed(2)}`));
+      }
+      console.log();
       
     } catch (error) {
       spinner.fail('Failed to fetch positions summary');
@@ -999,7 +1101,7 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async closeAllPositions(swapToSOL: boolean = false, slippageBps: number = 10, maxFeeRate: number | null = null, preFilteredPositions?: any[]): Promise<ClaimResult> {
+  async closeAllPositions(swapToSOL: boolean = false, slippageBps: number = 10, maxFeeRate: number | null = null, maxDeposit: number | null = null, preFilteredPositions?: any[]): Promise<ClaimResult> {
     try {
       console.log(chalk.blue('🔍 Scanning all positions for closing...'));
 
@@ -1014,7 +1116,38 @@ class MeteoraFeeClaimer {
       }
 
       console.log(chalk.blue(`📊 Found ${allPositions.length} total position(s)`));
-      console.log(chalk.yellow('⚠️  This will close ALL positions and remove ALL liquidity!'));
+      
+      // Apply deposit filtering if enabled
+      let eligiblePositions = allPositions;
+      if (maxDeposit !== null) {
+        const solPrice = await fetchSOLPrice();
+        const maxDepositSOL = maxDeposit / solPrice;
+        console.log(chalk.blue(`💎 Filtering positions by deposit amount ≤ $${maxDeposit} USD (~${maxDepositSOL.toFixed(4)} SOL)`));
+        
+        eligiblePositions = allPositions.filter(position => {
+          const totalDeposit = (position.depositA || 0) + (position.depositB || 0);
+          const totalDepositUSD = totalDeposit * solPrice;
+          
+          if (totalDeposit <= maxDepositSOL) {
+            return true;
+          } else {
+            const positionId = position.publicKey.toString().slice(0, 8);
+            console.log(chalk.gray(`   ⏭️ ${positionId}: Deposit $${totalDepositUSD.toFixed(2)} USD > $${maxDeposit} USD, skipping`));
+            return false;
+          }
+        });
+        
+        console.log(chalk.blue(`📊 After filtering: ${eligiblePositions.length} position(s) eligible for closing`));
+      }
+
+      if (eligiblePositions.length === 0) {
+        return {
+          success: false,
+          error: maxDeposit !== null ? `No positions found with deposits ≤ $${maxDeposit} USD` : 'No eligible positions found'
+        };
+      }
+      
+      console.log(chalk.yellow('⚠️  This will close all eligible positions and remove liquidity!'));
       console.log();
 
       let totalFeesA = 0;
@@ -1023,14 +1156,14 @@ class MeteoraFeeClaimer {
       let allSignatures: string[] = [];
 
       // Process each position
-      for (let i = 0; i < allPositions.length; i++) {
-        const position = allPositions[i];
+      for (let i = 0; i < eligiblePositions.length; i++) {
+        const position = eligiblePositions[i];
         const positionId = position.publicKey.toString().slice(0, 8);
         const claimableFeesA = position.feeOwedA || 0;
         const claimableFeesB = position.feeOwedB || 0;
 
         try {
-          console.log(chalk.blue(`\n[${i + 1}/${allPositions.length}] Processing position ${positionId}...`));
+          console.log(chalk.blue(`\n[${i + 1}/${eligiblePositions.length}] Processing position ${positionId}...`));
           if (claimableFeesA > 0 || claimableFeesB > 0) {
             console.log(chalk.gray(`   Claimable fees: ${claimableFeesA > 0 ? claimableFeesA + ' (A) ' : ''}${claimableFeesB > 0 ? claimableFeesB + ' (B)' : ''}`));
           }
@@ -1174,7 +1307,7 @@ class MeteoraFeeClaimer {
     }
   }
 
-  async closeAllPositionsOptimized(swapToSOL: boolean = false, slippageBps: number = 10, minValueLamports: number = 150000): Promise<ClaimResult> {
+  async closeAllPositionsOptimized(swapToSOL: boolean = false, slippageBps: number = 10, minValueLamports: number = 150000, maxDeposit: number | null = null): Promise<ClaimResult> {
     try {
       console.log(chalk.blue('🔍 Processing positions...'));
 
@@ -1182,14 +1315,44 @@ class MeteoraFeeClaimer {
       let totalFeesB = 0;
       let successfulOperations = 0;
       let allSignatures: string[] = [];
-      let positionCount = 0;
 
       // Get positions using the SDK method that streams results
       const userPositions = await this.meteoraClient.getUserPositions(this.wallet.publicKey);
+      
+      console.log(chalk.blue(`📊 Found ${userPositions.length} total position(s)`));
 
-      for (let i = 0; i < userPositions.length; i++) {
-        const position = userPositions[i];
-        positionCount++;
+      // Apply deposit filtering if enabled
+      let eligiblePositions = userPositions;
+      if (maxDeposit !== null) {
+        const solPrice = await fetchSOLPrice();
+        const maxDepositSOL = maxDeposit / solPrice;
+        console.log(chalk.blue(`💎 Filtering positions by deposit amount ≤ $${maxDeposit} USD (~${maxDepositSOL.toFixed(4)} SOL)`));
+        
+        eligiblePositions = userPositions.filter(position => {
+          const totalDeposit = (position.depositA || 0) + (position.depositB || 0);
+          const totalDepositUSD = totalDeposit * solPrice;
+          
+          if (totalDeposit <= maxDepositSOL) {
+            return true;
+          } else {
+            const positionId = position.publicKey.toString().slice(0, 8);
+            console.log(chalk.gray(`   ⏭️ ${positionId}: Deposit $${totalDepositUSD.toFixed(2)} USD > $${maxDeposit} USD, skipping`));
+            return false;
+          }
+        });
+        
+        console.log(chalk.blue(`📊 After filtering: ${eligiblePositions.length} position(s) eligible for closing`));
+      }
+
+      if (eligiblePositions.length === 0) {
+        return {
+          success: false,
+          error: maxDeposit !== null ? `No positions found with deposits ≤ $${maxDeposit} USD` : 'No positions found'
+        };
+      }
+
+      for (let i = 0; i < eligiblePositions.length; i++) {
+        const position = eligiblePositions[i];
         const positionId = position.publicKey.toString().slice(0, 8);
         const claimableFeesA = position.feeOwedA || 0;
         const claimableFeesB = position.feeOwedB || 0;
@@ -1312,8 +1475,8 @@ class MeteoraFeeClaimer {
       }
 
       console.log(chalk.blue('\n📈 Summary:'));
-      console.log(chalk.gray(`   Positions processed: ${positionCount}`));
-      console.log(chalk.gray(`   Successful: ${successfulOperations} | Failed: ${positionCount - successfulOperations}`));
+      console.log(chalk.gray(`   Positions processed: ${eligiblePositions.length}`));
+      console.log(chalk.gray(`   Successful: ${successfulOperations} | Failed: ${eligiblePositions.length - successfulOperations}`));
 
       if (successfulOperations > 0) {
         return {
@@ -1443,6 +1606,24 @@ program
       } else {
         console.log(chalk.yellow('No claimable fees found.'));
       }
+      
+      // Add Total Summary (Deposits + Fees)
+      const totalDepositSOL = totalDepositsA + totalDepositsB;
+      const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+      const totalValueSOL = totalDepositSOL + totalFeeSOL;
+      
+      console.log();
+      console.log(chalk.magenta('🏆 Total Portfolio Value (Deposits + Fees):'));
+      console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${totalFeeSOL.toFixed(6)} SOL`));
+      console.log(chalk.gray(`   Grand Total: ~${totalValueSOL.toFixed(6)} SOL`));
+      
+      // Get SOL price for USD calculation
+      const solPrice = await fetchSOLPrice();
+      const totalValueUSD = totalValueSOL * solPrice;
+      if (totalValueUSD > 0) {
+        console.log(chalk.gray(`   Estimated USD Value: ~$${totalValueUSD.toFixed(2)}`));
+      }
+      console.log();
       
       if (options.verbose) {
         console.log(chalk.blue('\n📋 Detailed Breakdown by Pool:'));
@@ -1652,6 +1833,7 @@ program
   .option('--swap', 'Swap all received tokens to SOL using Jupiter')
   .option('--slippage <bps>', 'Slippage tolerance in basis points (default: 10)', '10')
   .option('--min-value <lamports>', 'Minimum token value in lamports to swap (default: 150000 = ~$0.15)', '150000')
+  .option('--max-deposit <usd>', 'Maximum deposit amount in USD to close (positions with higher deposits will be skipped)')
   .option('--confirm', 'Skip confirmation prompt (dangerous!)')
   .option('-v, --verbose', 'Show detailed output')
   .action(async (options: any) => {
@@ -1666,9 +1848,16 @@ program
 
       const swapToSOL = !!options.swap;
       const slippageBps = parseInt(options.slippage);
+      const maxDeposit = options.maxDeposit ? parseFloat(options.maxDeposit) : null;
 
       // Show warning
-      console.log(chalk.red('⚠️  WARNING: This will close ALL your positions!'));
+      console.log(chalk.red('⚠️  WARNING: This will close positions!'));
+      if (maxDeposit !== null) {
+        console.log(chalk.blue(`💎 Deposit Filter: Enabled - closing positions ≤ $${maxDeposit} USD`));
+        console.log(chalk.gray('   • Positions with higher deposits will be skipped'));
+      } else {
+        console.log(chalk.gray('   • ALL positions will be closed'));
+      }
       console.log(chalk.gray('   • All fees will be claimed'));
       console.log(chalk.gray('   • All liquidity will be removed'));
       console.log(chalk.gray('   • All positions will be closed'));
@@ -1699,7 +1888,7 @@ program
       console.log(chalk.blue('🚀 Processing positions...'));
       const minValueLamports = parseInt(options.minValue);
 
-      const result = await claimer.closeAllPositionsOptimized(swapToSOL, slippageBps, minValueLamports);
+      const result = await claimer.closeAllPositionsOptimized(swapToSOL, slippageBps, minValueLamports, maxDeposit);
 
       if (result.success) {
         if (swapToSOL) {
@@ -1731,6 +1920,7 @@ program
   .description('Close ALL positions (claim fees, remove liquidity, and close)')
   .option('--swap', 'Swap all received tokens to SOL using Jupiter')
   .option('--slippage <bps>', 'Slippage tolerance in basis points (default: 10)', '10')
+  .option('--max-deposit <usd>', 'Maximum deposit amount in USD to close (positions with higher deposits will be skipped)')
   .option('--confirm', 'Skip confirmation prompt (dangerous!)')
   .option('-v, --verbose', 'Show detailed output')
   .action(async (options: any) => {
@@ -1755,10 +1945,18 @@ program
 
       const swapToSOL = !!options.swap;
       const slippageBps = parseInt(options.slippage);
+      const maxDeposit = options.maxDeposit ? parseFloat(options.maxDeposit) : null;
 
       // Show warning and ask for confirmation
-      console.log(chalk.red('⚠️  WARNING: This will close ALL your positions!'));
-      console.log(chalk.yellow(`📊 Found ${positionCount} position(s) that will be processed`));
+      console.log(chalk.red('⚠️  WARNING: This will close positions!'));
+      if (maxDeposit !== null) {
+        console.log(chalk.blue(`💎 Deposit Filter: Enabled - closing positions ≤ $${maxDeposit} USD`));
+        console.log(chalk.yellow(`📊 Found ${positionCount} position(s) total (will filter by deposit amount)`));
+        console.log(chalk.gray('   • Positions with higher deposits will be skipped'));
+      } else {
+        console.log(chalk.yellow(`📊 Found ${positionCount} position(s) that will be processed`));
+        console.log(chalk.gray('   • ALL positions will be closed'));
+      }
       console.log(chalk.gray('   • All fees will be claimed'));
       console.log(chalk.gray('   • All liquidity will be removed'));
       console.log(chalk.gray('   • All positions will be closed'));
@@ -1787,7 +1985,7 @@ program
       }
 
       console.log(chalk.blue('🚀 Processing positions...'));
-      const result = await claimer.closeAllPositions(swapToSOL, slippageBps);
+      const result = await claimer.closeAllPositions(swapToSOL, slippageBps, null, maxDeposit);
 
       if (result.success) {
         if (swapToSOL) {

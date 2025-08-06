@@ -3,6 +3,7 @@ import { CpAmm, getUnClaimReward } from '@meteora-ag/cp-amm-sdk';
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync, getAccount } from '@solana/spl-token';
 import BN from 'bn.js';
 import { JupiterClient } from './jupiter-client.js';
+import { fetchSOLPrice } from './utils.js';
 
 export interface Position {
     publicKey: PublicKey;
@@ -25,11 +26,126 @@ export class MeteoraClient {
     private connection: Connection;
     private cpAmm: CpAmm;
     private jupiterClient: JupiterClient;
+    private tokenPriceCache: Map<string, { price: number; timestamp: number }> = new Map();
+    private lastJupiterCall: number = 0;
+    private readonly JUPITER_RATE_LIMIT_MS = 1200; // 1.2 seconds between calls (safe but faster)
+    private readonly CACHE_DURATION_MS = 30000; // 30 seconds cache for current prices
+    
+    // Major token mints that we can get from CoinGecko instead of Jupiter
+    private readonly MAJOR_TOKENS = new Map([
+        ['EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', { id: 'usd-coin', symbol: 'USDC' }], // USDC
+        ['Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', { id: 'tether', symbol: 'USDT' }], // USDT
+        ['DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', { id: 'bonk', symbol: 'BONK' }], // BONK
+        ['JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', { id: 'jupiter-exchange-solana', symbol: 'JUP' }], // JUP
+        ['mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', { id: 'marinade-staked-sol', symbol: 'mSOL' }], // mSOL
+    ]);
 
     constructor(connection: Connection) {
         this.connection = connection;
         this.cpAmm = new CpAmm(connection);
         this.jupiterClient = new JupiterClient(connection);
+    }
+
+    // Get token price from CoinGecko for major tokens
+    private async getCoinGeckoPrice(tokenMint: string): Promise<number | null> {
+        const tokenInfo = this.MAJOR_TOKENS.get(tokenMint);
+        if (!tokenInfo) return null;
+
+        try {
+            const response = await fetch(
+                `https://api.coingecko.com/api/v3/simple/price?ids=${tokenInfo.id}&vs_currencies=usd`,
+                { 
+                    signal: AbortSignal.timeout(5000),
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'meteora-position-manager/1.0.0'
+                    }
+                }
+            );
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            
+            const data = await response.json();
+            return data[tokenInfo.id]?.usd || null;
+        } catch (error) {
+            console.log(`⚠️  Could not fetch ${tokenInfo.symbol} price from CoinGecko: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+        }
+    }
+
+    // Rate-limited token price conversion using cached data
+    async convertTokenToSOL(tokenMint: string, amount: number): Promise<number> {
+        if (amount === 0) return 0;
+        
+        const now = Date.now();
+        const cacheKey = `${tokenMint}-${amount}`;
+        
+        // Check cache first
+        const cached = this.tokenPriceCache.get(cacheKey);
+        if (cached && (now - cached.timestamp) < this.CACHE_DURATION_MS) {
+            return cached.price;
+        }
+
+        try {
+            // For major tokens, try CoinGecko first (more reliable and doesn't count against Jupiter limits)
+            const coinGeckoPrice = await this.getCoinGeckoPrice(tokenMint);
+            if (coinGeckoPrice !== null) {
+                const solPrice = await fetchSOLPrice();
+                const tokenValueUSD = (amount / 1e9) * coinGeckoPrice; // Convert to full tokens and multiply by USD price
+                const tokenValueSOL = tokenValueUSD / solPrice; // Convert USD to SOL
+                
+                this.tokenPriceCache.set(cacheKey, {
+                    price: tokenValueSOL,
+                    timestamp: now
+                });
+                
+                return tokenValueSOL;
+            }
+
+            // For other tokens, use Jupiter (with rate limiting)
+            const timeSinceLastCall = now - this.lastJupiterCall;
+            if (timeSinceLastCall < this.JUPITER_RATE_LIMIT_MS) {
+                await new Promise(resolve => setTimeout(resolve, this.JUPITER_RATE_LIMIT_MS - timeSinceLastCall));
+            }
+
+            const quote = await this.jupiterClient.getQuote(
+                tokenMint,
+                this.jupiterClient.getSOLMint(),
+                amount,
+                10
+            );
+
+            this.lastJupiterCall = Date.now();
+
+            if (!quote) {
+                // Cache a fallback result to avoid repeated failed calls
+                this.tokenPriceCache.set(cacheKey, {
+                    price: 0,
+                    timestamp: now
+                });
+                return 0;
+            }
+
+            const solAmount = parseInt(quote.outAmount) / 1e9; // Convert lamports to SOL
+            
+            this.tokenPriceCache.set(cacheKey, {
+                price: solAmount,
+                timestamp: now
+            });
+            
+            return solAmount;
+            
+        } catch (error) {
+            console.log(`⚠️  Could not convert token ${tokenMint.slice(0, 8)}... to SOL: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            
+            // Cache a fallback result to avoid repeated failed calls
+            this.tokenPriceCache.set(cacheKey, {
+                price: 0,
+                timestamp: now
+            });
+            
+            return 0;
+        }
     }
 
     // Helper method to detect the correct token program for a mint

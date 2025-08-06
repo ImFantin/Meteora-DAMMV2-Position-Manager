@@ -104,8 +104,8 @@ export function sleep(ms: number): Promise<void> {
  */
 export function rateLimitDelay(operationType: 'light' | 'medium' | 'heavy' = 'medium'): Promise<void> {
   const delays = {
-    light: 200,   // Simple queries (200ms = 5 req/sec)
-    medium: 500,  // Standard operations (500ms = 2 req/sec) 
+    light: 250,   // Simple queries (200ms = 5 req/sec)
+    medium: 600,  // Standard operations (500ms = 2 req/sec) 
     heavy: 1000   // Complex operations like position processing (1000ms = 1 req/sec)
   };
 

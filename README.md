@@ -9,7 +9,8 @@ A powerful command-line tool to manage your Meteora DAMM V2 positions with autom
 - 🔥 **Automated position closing** - Claim fees + close positions + optional token swapping
 - 💱 **Jupiter integration** - Convert received tokens to SOL automatically
 - 📊 **Position analytics** - Comprehensive position summaries and reporting
-- 🎯 **Fee rate filtering** - Only close positions in pools with favorable fee rates
+- 🎯 **Smart filtering** - Filter by pool fee rates OR deposit amounts for strategic closing
+- 💎 **Deposit filtering** - Close only positions with deposits under specified USD amounts
 - ⚡ **Rate limit optimization** - Smart delays to prevent RPC throttling
 - 🔒 **Dual key format support** - Works with both Base58 and Solflare array formats
 
@@ -77,7 +78,10 @@ node dist/index.js claim-all --min-fee 5.00
 # Close all positions with swap to SOL
 node dist/index.js close-all-fast --swap --confirm
 
-# View position summary
+# Close only small positions (≤$50 deposits) with swap
+node dist/index.js close-all --max-deposit 50 --swap
+
+# View position summary with total portfolio value
 node dist/index.js summary
 ```
 
@@ -89,11 +93,19 @@ node dist/index.js summary
 - Automatically skips positions below your threshold
 - Example: `$5.00` minimum = skip fees worth less than $5
 
-### Fee Rate Filtering
+### Smart Position Filtering
+
+**Fee Rate Filtering:**
 - Meteora pools start at 50% fees and decay over time
 - Filter to only close positions in pools with lower fees
 - Example: Set 20% to only close pools with ≤20% current fees
 - Saves money by avoiding high-fee pool transactions
+
+**Deposit Amount Filtering:**
+- Close only positions with deposits under a specific USD amount
+- Great for cleaning up small positions first
+- Example: Set $50 to only close positions with ≤$50 in deposits
+- Either/or choice - use fee rate OR deposit filtering
 
 ### Multi-Wallet Management
 - Automatically detects multiple wallets in `.env`
@@ -106,9 +118,9 @@ node dist/index.js summary
 ```
 🌊 Welcome to Meteora Fee Claimer & Position Manager
 ════════════════════════════════════════════════════════════
-🔑 Using Wallet 1: 7xKXtg2C...
+🔑 Using Wallet 1: AbC123...
 🔑 Wallet 1 Info:
-   Address: 7xKXtg2CWASsLkBkuGwU4AXLcnWjHxCBbQkd5nAuiXvF
+   Address: AbC123XYZwxyzABCdefghijklmnopqrstuvwxyzABC
    Balance: 2.1543 SOL
 
 √ What would you like to do? (Current: Wallet 1) 💰 Claim All Fees
@@ -124,9 +136,9 @@ node dist/index.js summary
 💰 Found 5 position(s) with fees ≥ $5.00
    (131 position(s) skipped due to low fees)
 
-[1/5] Processing position 9mWxQoZ3...
+[1/5] Processing position XyZ789...
    Claimable fees: 156789012 (B)
-✅ Fees claimed! Signature: 2Hx9KpL4mN8vR6tY3qA5bC7dE9fG1hI2jK3lM4nO5pQ6rS7tU8vW...
+✅ Fees claimed! Signature: TxABC123def456ghi789jkl012mno345pqr678stu901vwx234yz567...
 
 📈 Summary:
    Positions processed: 5
@@ -146,6 +158,9 @@ node dist/index.js claim-all --min-fee 10.00
 
 # Close positions with specific settings
 node dist/index.js close-all-fast --swap --slippage 20 --min-value 150000
+
+# Close only positions with small deposits
+node dist/index.js close-all --max-deposit 100 --swap
 
 # Skip confirmation prompts
 node dist/index.js close-all-fast --swap --confirm
