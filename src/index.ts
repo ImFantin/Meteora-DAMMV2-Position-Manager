@@ -917,12 +917,8 @@ class MeteoraFeeClaimer {
       // Display fee information
       if (totalFeesA > 0 || totalFeesB > 0) {
         console.log(chalk.green('💰 Total Claimable Fees:'));
-        if (totalFeesA > 0) {
-          console.log(chalk.gray(`   Token A: ~${(totalFeesA / 1e9).toFixed(6)} SOL`));
-        }
-        if (totalFeesB > 0) {
-          console.log(chalk.gray(`   Token B: ~${(totalFeesB / 1e9).toFixed(6)} SOL`));
-        }
+        const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+        console.log(chalk.gray(`   Total: ~${totalFeeSOL.toFixed(6)} SOL`));
         if (totalFeesUSD > 0) {
           console.log(chalk.gray(`   Estimated USD Value: ~$${totalFeesUSD.toFixed(2)}`));
         }
@@ -932,13 +928,13 @@ class MeteoraFeeClaimer {
       
       // Add Total Summary (Deposits + Fees)
       const totalDepositSOL = totalDepositsA + totalDepositsB;
-      const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
-      const totalValueSOL = totalDepositSOL + totalFeeSOL;
+      const combinedFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+      const totalValueSOL = totalDepositSOL + combinedFeeSOL;
       const totalValueUSD = totalDepositsUSD + totalFeesUSD;
       
       console.log();
       console.log(chalk.magenta('🏆 Total Portfolio Value (Deposits + Fees):'));
-      console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${totalFeeSOL.toFixed(6)} SOL`));
+      console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${combinedFeeSOL.toFixed(6)} SOL`));
       console.log(chalk.gray(`   Grand Total: ~${totalValueSOL.toFixed(6)} SOL`));
       if (totalValueUSD > 0) {
         console.log(chalk.gray(`   Estimated USD Value: ~$${totalValueUSD.toFixed(2)}`));
@@ -1595,12 +1591,8 @@ program
       
       if (totalFeesA > 0 || totalFeesB > 0) {
         console.log(chalk.green('💰 Total Claimable Fees:'));
-        if (totalFeesA > 0) {
-          console.log(chalk.gray(`   Token A: ~${(totalFeesA / 1e9).toFixed(6)} SOL`));
-        }
-        if (totalFeesB > 0) {
-          console.log(chalk.gray(`   Token B: ~${(totalFeesB / 1e9).toFixed(6)} SOL`));
-        }
+        const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+        console.log(chalk.gray(`   Total: ~${totalFeeSOL.toFixed(6)} SOL`));
         console.log();
         console.log(chalk.blue('💡 Run "npm run claim-all" to claim all available fees'));
       } else {
@@ -1609,12 +1601,12 @@ program
       
       // Add Total Summary (Deposits + Fees)
       const totalDepositSOL = totalDepositsA + totalDepositsB;
-      const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
-      const totalValueSOL = totalDepositSOL + totalFeeSOL;
+      const combinedFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+      const totalValueSOL = totalDepositSOL + combinedFeeSOL;
       
       console.log();
       console.log(chalk.magenta('🏆 Total Portfolio Value (Deposits + Fees):'));
-      console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${totalFeeSOL.toFixed(6)} SOL`));
+      console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${combinedFeeSOL.toFixed(6)} SOL`));
       console.log(chalk.gray(`   Grand Total: ~${totalValueSOL.toFixed(6)} SOL`));
       
       // Get SOL price for USD calculation
