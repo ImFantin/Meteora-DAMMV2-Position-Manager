@@ -330,7 +330,7 @@ export class MeteoraClient {
                         }
                     }
                     
-                    // Convert deposits to SOL equivalent
+                    // Calculate Token B deposit value in SOL equivalent
                     let depositBInSOL = 0;
                     if (poolState.tokenBMint.toString() === SOL_MINT) {
                         depositBInSOL = depositB / 1e9;
@@ -341,10 +341,15 @@ export class MeteoraClient {
                         } catch {}
                     }
                     
-                    // Only count Token A deposits if it's actually SOL (avoid conversion issues)
+                    // Calculate Token A deposit value in SOL equivalent for accurate totals
                     let depositAInSOL = 0;
                     if (poolState.tokenAMint.toString() === SOL_MINT && depositA > 0) {
                         depositAInSOL = depositA / 1e9;
+                    } else if (depositA > 0) {
+                        try {
+                            const quote = await this.jupiterClient.getQuote(poolState.tokenAMint.toString(), SOL_MINT, depositA, 50);
+                            if (quote) depositAInSOL = parseInt(quote.outAmount) / 1e9;
+                        } catch {}
                     }
 
                     // Increased delay between position processing to respect RPC limits

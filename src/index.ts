@@ -890,7 +890,7 @@ class MeteoraFeeClaimer {
       }
 
       // Calculate USD values
-      totalFeesUSD = (totalFeesB / 1e9) * solPrice;
+      totalFeesUSD = ((totalFeesA + totalFeesB) / 1e9) * solPrice;
       totalDepositsUSD = (totalDepositsA + totalDepositsB) * solPrice;
       
       spinner.succeed(`Found ${positions.length} position(s)`);
@@ -1581,18 +1581,29 @@ program
       console.log(chalk.gray(`Unique Pools: ${positionsByPool.size}`));
       console.log();
       
+      // Get SOL price for USD calculations
+      const solPrice = await fetchSOLPrice();
+      
       // Display deposit information
       if (totalDepositsA > 0 || totalDepositsB > 0) {
         console.log(chalk.blue('💎 Total Deposits:'));
         const totalDepositSOL = totalDepositsA + totalDepositsB;
+        const totalDepositsUSD = totalDepositSOL * solPrice;
         console.log(chalk.gray(`   Total: ~${totalDepositSOL.toFixed(6)} SOL`));
+        if (totalDepositsUSD > 0) {
+          console.log(chalk.gray(`   Estimated USD Value: ~$${totalDepositsUSD.toFixed(2)}`));
+        }
         console.log();
       }
       
       if (totalFeesA > 0 || totalFeesB > 0) {
         console.log(chalk.green('💰 Total Claimable Fees:'));
         const totalFeeSOL = (totalFeesA + totalFeesB) / 1e9;
+        const totalFeesUSD = totalFeeSOL * solPrice;
         console.log(chalk.gray(`   Total: ~${totalFeeSOL.toFixed(6)} SOL`));
+        if (totalFeesUSD > 0) {
+          console.log(chalk.gray(`   Estimated USD Value: ~$${totalFeesUSD.toFixed(2)}`));
+        }
         console.log();
         console.log(chalk.blue('💡 Run "npm run claim-all" to claim all available fees'));
       } else {
@@ -1603,15 +1614,12 @@ program
       const totalDepositSOL = totalDepositsA + totalDepositsB;
       const combinedFeeSOL = (totalFeesA + totalFeesB) / 1e9;
       const totalValueSOL = totalDepositSOL + combinedFeeSOL;
+      const totalValueUSD = totalValueSOL * solPrice;
       
       console.log();
       console.log(chalk.magenta('🏆 Total Portfolio Value (Deposits + Fees):'));
       console.log(chalk.gray(`   Deposits: ~${totalDepositSOL.toFixed(6)} SOL + Fees: ~${combinedFeeSOL.toFixed(6)} SOL`));
       console.log(chalk.gray(`   Grand Total: ~${totalValueSOL.toFixed(6)} SOL`));
-      
-      // Get SOL price for USD calculation
-      const solPrice = await fetchSOLPrice();
-      const totalValueUSD = totalValueSOL * solPrice;
       if (totalValueUSD > 0) {
         console.log(chalk.gray(`   Estimated USD Value: ~$${totalValueUSD.toFixed(2)}`));
       }
